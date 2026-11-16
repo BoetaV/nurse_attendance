@@ -1,0 +1,6 @@
+# clasp credentials / local project link – never commit
+.clasprc.json
+.clasp.json
+# build output
+dist/
+node_modules/

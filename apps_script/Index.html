@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<base target="_top">
+<meta charset="UTF-8">
+<?!= include('Styles'); ?>
+</head>
+<body>
+<div class="page">
+  <header>
+    <?!= include('Logo'); ?>
+    <div class="ttl">
+      <h1>WEEKLY NURSING ATTENDANCE &amp; ABSENTEEISM REGISTER</h1>
+      <p>One register per unit, per week (Monday–Sunday change-over) · completed in line with the SOP</p>
+    </div>
+  </header>
+  <div class="band"></div>
+
+  <nav id="nav" class="noprint hidden">
+    <button data-view="vDash" class="on">Dashboard</button>
+    <button data-view="vReg" id="navReg" class="hidden">Register</button>
+    <button data-view="vMonth" id="navMonth">Monthly roll-up</button>
+    <button data-view="vAdmin" id="navAdmin" class="hidden">Users &amp; units</button>
+    <span class="sp"></span>
+    <span class="me" id="me"></span>
+    <button class="alt sm" data-view="vPwd">Change password</button>
+    <button class="warn sm" id="bLogout">Sign out</button>
+  </nav>
+
+  <!-- ================= LOGIN ================= -->
+  <div id="vLogin" class="view">
+    <div class="card">
+      <h2>Sign in</h2>
+      <form id="fLogin" autocomplete="on">
+        <div class="field"><label for="lUser">Username</label><input id="lUser" autocomplete="username" required></div>
+        <div class="field"><label for="lPass">Password</label><input id="lPass" type="password" autocomplete="current-password" required></div>
+        <button type="submit">Sign in</button>
+        <p class="err" id="lErr"></p>
+      </form>
+      <p class="rules">Accounts are created by the system administrator. Forgot your password? Ask the administrator to reset it.</p>
+    </div>
+  </div>
+
+  <!-- ================= CHANGE PASSWORD ================= -->
+  <div id="vPwd" class="view hidden">
+    <div class="card">
+      <h2>Change password</h2>
+      <p class="note hidden" id="pwdForce">You are using a temporary password. Choose your own password to continue.</p>
+      <form id="fPwd">
+        <div class="field"><label for="pOld">Current password</label><input id="pOld" type="password" autocomplete="current-password" required></div>
+        <div class="field"><label for="pNew">New password (8+ characters, letters and numbers)</label><input id="pNew" type="password" autocomplete="new-password" required></div>
+        <div class="field"><label for="pNew2">Repeat new password</label><input id="pNew2" type="password" autocomplete="new-password" required></div>
+        <button type="submit">Save new password</button>
+        <p class="err" id="pErr"></p>
+      </form>
+    </div>
+  </div>
+
+  <!-- ================= DASHBOARD ================= -->
+  <div id="vDash" class="view hidden">
+    <section>
+      <h2>Open a weekly register</h2>
+      <div class="grid">
+        <div id="dFacBox"><label for="dFac">Hospital</label><select id="dFac"></select></div>
+        <div><label for="dArea">Area</label><select id="dArea"></select></div>
+        <div><label for="dUnit">Unit</label><select id="dUnit"></select></div>
+        <div><label for="dMonth">Month</label><input id="dMonth" type="month"></div>
+        <div><label for="dWeek">Week (Monday – Sunday)</label><select id="dWeek"></select></div>
+      </div>
+      <div class="toolbar">
+        <button id="bOpenReg">Open register</button>
+        <button class="alt" id="bThisWeek">This week</button>
+        <span class="rules" id="dHint"></span>
+      </div>
+    </section>
+
+    <section id="todoSec">
+      <h2>Waiting for you</h2>
+      <div class="scroll"><table id="todoTbl"></table></div>
+    </section>
+
+    <section>
+      <h2>Registers</h2>
+      <div class="toolbar" style="margin-top:0;margin-bottom:10px">
+        <label class="muted">Area <select id="fArea"><option value="">All</option></select></label>
+        <label class="muted">Month <input id="fMonth" type="month"></label>
+        <label class="muted">Status
+          <select id="fStatus"><option value="">All</option><option>Draft</option><option>Completed</option><option>Checked</option><option>Approved</option></select>
+        </label>
+        <button class="alt sm" id="bRefresh">Refresh</button>
+      </div>
+      <div class="scroll"><table id="regList"></table></div>
+    </section>
+  </div>
+
+  <!-- ================= REGISTER ================= -->
+  <div id="vReg" class="view hidden">
+    <section>
+      <div id="rNotes"></div>
+      <div class="grid" id="rHead"></div>
+      <div class="toolbar noprint">
+        <button id="bSave">Save</button>
+        <button class="alt" id="bCopy">Copy Plan → Actual</button>
+        <button class="alt" id="bPdf">Download PDF</button>
+        <button class="alt" id="bSheet">Open in Google Sheets</button>
+        <button class="alt" onclick="window.print()">Print</button>
+        <button class="alt" id="bBack">← Dashboard</button>
+        <span class="rules" id="saveState"></span>
+      </div>
+    </section>
+
+    <section>
+      <h2>1. Daily register (number of nurses)</h2>
+      <div class="scroll"><table id="reg"></table></div>
+      <p class="rules">Counting: 7–7 shifts = 1 · 7–1 / 1–7 shifts = 0.5 · Students not counted · Relief/agency only when covering a rostered post (note in Comments) · Enter 0, never leave blank.</p>
+    </section>
+
+    <section>
+      <h2>2. Weekly summary</h2>
+      <div class="kpis">
+        <div class="kpi"><div class="l">Total planned (P)</div><div class="v" id="kP">0</div></div>
+        <div class="kpi"><div class="l">Total actual (A)</div><div class="v" id="kA">0</div></div>
+        <div class="kpi"><div class="l">Shifts absent (X = P − A)</div><div class="v" id="kX">0</div></div>
+        <div class="kpi" id="kRbox"><div class="l">% absent (X ÷ P × 100)</div><div class="v" id="kR">0.0%</div></div>
+      </div>
+    </section>
+
+    <section>
+      <h2>3. Absence details</h2>
+      <div class="scroll"><table class="abs" id="absTbl"></table></div>
+      <div class="toolbar noprint"><button class="alt sm" id="bAddAbs">+ Add absence</button><span class="rules" id="absHint"></span></div>
+    </section>
+
+    <section>
+      <h2>4. Comments</h2>
+      <textarea id="comments" maxlength="5000" placeholder="Reasons for absence, relief / agency cover, actual higher than plan, action taken where absenteeism is above 10%…"></textarea>
+    </section>
+
+    <section class="noprint">
+      <h2>SOP checks</h2>
+      <ul class="checks" id="checks"></ul>
+    </section>
+
+    <section>
+      <h2>5. Sign-off</h2>
+      <div class="sign" id="signBox"></div>
+      <div class="toolbar noprint" id="signActions"></div>
+    </section>
+  </div>
+
+  <!-- ================= MONTHLY ================= -->
+  <div id="vMonth" class="view hidden">
+    <section>
+      <h2>Monthly roll-up</h2>
+      <div class="grid">
+        <div><label for="mFac">Hospital</label><select id="mFac"></select></div>
+        <div><label for="mArea">Area</label><select id="mArea"></select></div>
+        <div><label for="mMonth">Month</label><input id="mMonth" type="month"></div>
+      </div>
+      <div class="toolbar noprint">
+        <button id="bMLoad">Show</button>
+        <button class="alt" id="bMCsv">Export CSV</button>
+        <button class="alt" id="bMSheet">Create Google Sheet</button>
+        <button class="alt" onclick="window.print()">Print</button>
+        <span class="rules">Weeks run Monday–Sunday and belong to the month their Thursday falls in.</span>
+      </div>
+    </section>
+    <section id="mKpis" class="hidden"></section>
+    <section><div class="scroll"><table id="monTbl"></table></div></section>
+  </div>
+
+  <!-- ================= ADMIN ================= -->
+  <div id="vAdmin" class="view hidden">
+    <section>
+      <h2>Hospitals, areas &amp; units</h2>
+      <div class="cols">
+        <div>
+          <div class="toolbar" style="margin-top:0;margin-bottom:8px"><input id="uFilter" placeholder="Filter units…" style="padding:5px;border:1px solid var(--line);border-radius:4px;width:220px"></div>
+          <div class="scroll" style="max-height:420px;overflow-y:auto"><table id="unitTbl"></table></div>
+        </div>
+        <div>
+          <div class="grid">
+            <div><label for="uFac">Hospital</label><select id="uFac"></select></div>
+            <div><label for="uArea">Area</label><input id="uArea" list="areaList" placeholder="e.g. Ward, OPD, Theatre"></div>
+            <div><label for="uUnit">Unit</label><input id="uUnit" placeholder="e.g. Ward 5A Medical Male"></div>
+          </div>
+          <datalist id="areaList"></datalist>
+          <div class="toolbar"><button id="bAddUnit">Add / update unit</button></div>
+          <h2 style="margin-top:22px">Import reporting units (CSV)</h2>
+          <p class="rules" style="margin-top:0">Header row <b>Hospital;Area;Unit Name</b> (semicolon or comma), like <i>reporting_units.csv</i>. If the file has no Hospital column, the units go to the hospital selected above. Units that already exist get their area updated. Nothing is deleted.</p>
+          <div class="toolbar"><button class="alt" id="bImpUnits">Choose CSV file…</button><input type="file" id="fImpUnits" accept=".csv,.txt" hidden></div>
+        </div>
+      </div>
+    </section>
+    <section>
+      <h2>Users</h2>
+      <div class="toolbar" style="margin-top:0;margin-bottom:10px"><button id="bNewUser">+ New user</button></div>
+      <div class="scroll"><table id="userTbl"></table></div>
+    </section>
+  </div>
+
+  <footer><span>Together, moving the health system forward</span><span>Eastern Cape Department of Health</span></footer>
+</div>
+
+<!-- user editor -->
+<div class="modal hidden" id="userModal"><div>
+  <h3 id="umTitle">User</h3>
+  <div class="grid" style="background:#fff;padding:0">
+    <div><label for="umUser">Username</label><input id="umUser" autocomplete="off"></div>
+    <div><label for="umName">Full name (used for sign-off)</label><input id="umName"></div>
+    <div><label for="umEmail">Email (optional)</label><input id="umEmail" type="email"></div>
+    <div><label for="umRole">Role</label><select id="umRole"></select></div>
+    <div><label for="umFac">Hospital</label><select id="umFac"></select></div>
+    <div><label><input type="checkbox" id="umActive" checked> Active</label></div>
+  </div>
+  <div class="field" style="margin-top:10px"><label>Units</label>
+    <label class="muted"><input type="checkbox" id="umAll"> All units in the hospital</label>
+    <div class="unitpick" id="umUnits"></div>
+  </div>
+  <p class="err" id="umErr"></p>
+  <div class="toolbar"><button id="umSave">Save</button><button class="alt" id="umCancel">Cancel</button></div>
+</div></div>
+
+<!-- generic dialog -->
+<div class="modal hidden" id="dlg"><div>
+  <h3 id="dlgTitle"></h3>
+  <div id="dlgBody"></div>
+  <div class="toolbar" id="dlgBtns"></div>
+</div></div>
+
+<div id="busy" class="hidden"><div id="busyText">Working…</div></div>
+<div id="toast" class="hidden"></div>
+
+<?!= include('App'); ?>
+</body>
+</html>

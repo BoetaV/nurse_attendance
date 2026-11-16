@@ -1,0 +1,612 @@
+<script>
+/* ===================================================================
+   Weekly Nursing Attendance & Absenteeism Register – web client
+   =================================================================== */
+const $ = id => document.getElementById(id);
+const esc = s => String(s === undefined || s === null ? '' : s).replace(/[&<>"']/g, m => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[m]));
+const num = v => { const n = parseFloat(v); return isNaN(n) ? 0 : n; };
+const r1 = n => Math.round(n * 10) / 10;
+const pct = (p, a) => p ? (p - a) / p * 100 : 0;
+const band = r => r > 15 ? 'hi' : r > 10 ? 'mid' : '';
+const fmtD = s => { if (!s) return ''; const p = String(s).slice(0, 10).split('-'); return p.length === 3 ? `${p[2]}/${p[1]}/${p[0]}` : s; };
+const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+
+let TOKEN = null, ME = null, CFG = null, UNITS = [], FACILITIES = [], TODAY = '';
+let REG = null, D = null, DIRTY = false, MONTH = null;
+try { TOKEN = sessionStorage.getItem('ecdoh_abs_token'); } catch (e) { /* storage blocked */ }
+
+// ---------------------------------------------------------------- week helpers (same rules as the server)
+function isoToUtc(iso) { const [y, m, d] = iso.split('-').map(Number); return new Date(Date.UTC(y, m - 1, d)); }
+function utcToIso(d) { return d.toISOString().slice(0, 10); }
+function addDays(iso, n) { const d = isoToUtc(iso); d.setUTCDate(d.getUTCDate() + n); return utcToIso(d); }
+function weekInfo(iso) {
+  const d = isoToUtc(iso), dow = (d.getUTCDay() + 6) % 7;
+  const monday = addDays(iso, -dow), thu = isoToUtc(addDays(monday, 3));
+  const y = thu.getUTCFullYear(), m = thu.getUTCMonth();
+  return { weekFrom: monday, weekTo: addDays(monday, 6), month: `${y}-${String(m + 1).padStart(2, '0')}`,
+           monthLabel: `${MONTHS[m]} ${y}`, weekNo: Math.floor((thu.getUTCDate() - 1) / 7) + 1 };
+}
+function weeksOfMonth(ym) {
+  if (!/^\d{4}-\d{2}$/.test(ym || '')) return [];
+  let w = weekInfo(ym + '-01'); if (w.month !== ym) w = weekInfo(addDays(w.weekFrom, 7));
+  const out = []; while (w.month === ym) { out.push(w); w = weekInfo(addDays(w.weekFrom, 7)); } return out;
+}
+
+// ---------------------------------------------------------------- server calls & UI helpers
+function busy(on, text) { $('busy').classList.toggle('hidden', !on); if (text) $('busyText').textContent = text; }
+let toastT;
+function toast(msg, bad) { const t = $('toast'); t.textContent = msg; t.className = bad ? 'bad' : ''; clearTimeout(toastT); toastT = setTimeout(() => t.className = 'hidden', bad ? 9000 : 4000); }
+
+/**
+ * Transport. Inside the Apps Script web app we use google.script.run; on the
+ * GitHub Pages site (window.API_URL set by the build) we POST JSON to doPost().
+ * text/plain keeps it a "simple" request, so the browser sends no CORS pre-flight.
+ */
+const API_URL = window.API_URL || '';
+function rpc(fn, ...args) {
+  if (window.google && google.script && google.script.run) {
+    return new Promise((res, rej) => google.script.run.withSuccessHandler(res).withFailureHandler(rej)[fn](...args));
+  }
+  if (!API_URL) return Promise.reject(new Error('The server address (API_URL) is not configured for this page.'));
+  return fetch(API_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ fn, args }) })
+    .then(r => { if (!r.ok) throw new Error('Server error (' + r.status + ').'); return r.json(); })
+    .catch(e => { throw new Error(e.message === 'Failed to fetch' ? 'Cannot reach the server – check your connection.' : e.message); });
+}
+
+function call(action, payload, text) {
+  busy(true, text || 'Working…');
+  return rpc('api', TOKEN, action, payload || {}).then(r => {
+    busy(false);
+    if (r && r.ok) return r.data;
+    const err = new Error(r ? r.error : 'No response from server'); err.code = r && r.code;
+    if (err.code === 'AUTH') signOutLocal(err.message);
+    else if (err.code === 'MUST_CHANGE') showForcePwd();
+    throw err;
+  }, e => { busy(false); throw e; });
+}
+const fail = e => toast(e.message || String(e), true);
+
+/** Small modal dialog. buttons: [{label, cls, value}] → resolves with value (and the body element). */
+function dialog(title, html, buttons) {
+  return new Promise(resolve => {
+    $('dlgTitle').textContent = title; $('dlgBody').innerHTML = html;
+    $('dlgBtns').innerHTML = buttons.map((b, i) => `<button data-i="${i}" class="${b.cls || ''}">${esc(b.label)}</button>`).join('');
+    $('dlg').classList.remove('hidden');
+    $('dlgBtns').onclick = e => { const i = e.target.dataset.i; if (i === undefined) return; $('dlg').classList.add('hidden'); resolve({ value: buttons[i].value, body: $('dlgBody') }); };
+  });
+}
+const confirmBox = (title, text, ok) => dialog(title, `<p>${text}</p>`, [{ label: ok || 'OK', value: true }, { label: 'Cancel', cls: 'alt', value: false }]).then(r => r.value);
+function download(name, blob) { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000); }
+const csv = rows => rows.map(r => r.map(v => `"${String(v === undefined || v === null ? '' : v).replace(/"/g, '""')}"`).join(',')).join('\r\n');
+
+// ---------------------------------------------------------------- views
+function show(view) {
+  if (view !== 'vReg' && REG && DIRTY && !window.confirm('You have unsaved changes on this register. Leave without saving?')) return false;
+  if (view !== 'vReg' && DIRTY) DIRTY = false;
+  document.querySelectorAll('.view').forEach(v => v.classList.toggle('hidden', v.id !== view));
+  document.querySelectorAll('nav button[data-view]').forEach(b => b.classList.toggle('on', b.dataset.view === view));
+  window.scrollTo(0, 0);
+  return true;
+}
+document.querySelectorAll('nav button[data-view]').forEach(b => b.onclick = () => {
+  const v = b.dataset.view; if (!show(v)) return;
+  if (v === 'vDash') loadDash(); if (v === 'vMonth') initMonth(); if (v === 'vAdmin') loadAdmin();
+  if (v === 'vPwd') { $('pwdForce').classList.add('hidden'); $('fPwd').reset(); $('pErr').textContent = ''; }
+});
+
+// ---------------------------------------------------------------- authentication
+$('fLogin').onsubmit = e => {
+  e.preventDefault(); $('lErr').textContent = ''; busy(true, 'Signing in…');
+  rpc('login', $('lUser').value.trim(), $('lPass').value).then(r => {
+    busy(false);
+    if (!r.ok) { $('lErr').textContent = r.error; return; }
+    TOKEN = r.data.token; try { sessionStorage.setItem('ecdoh_abs_token', TOKEN); } catch (x) {}
+    $('lPass').value = ''; start();
+  }, x => { busy(false); $('lErr').textContent = x.message; });
+};
+function signOutLocal(msg) {
+  TOKEN = null; ME = null; REG = null; DIRTY = false;
+  try { sessionStorage.removeItem('ecdoh_abs_token'); } catch (x) {}
+  $('nav').classList.add('hidden'); show('vLogin'); $('lErr').textContent = msg || '';
+}
+$('bLogout').onclick = () => {
+  if (DIRTY && !window.confirm('You have unsaved changes. Sign out anyway?')) return;
+  const t = TOKEN; DIRTY = false; signOutLocal(''); rpc('logout', t).catch(() => {});
+};
+function showForcePwd() { show('vPwd'); $('pwdForce').classList.remove('hidden'); $('nav').classList.add('hidden'); }
+$('fPwd').onsubmit = e => {
+  e.preventDefault(); $('pErr').textContent = '';
+  if ($('pNew').value !== $('pNew2').value) { $('pErr').textContent = 'The new passwords do not match.'; return; }
+  call('changePassword', { oldPassword: $('pOld').value, newPassword: $('pNew').value }, 'Saving password…')
+    .then(u => { ME = u; $('fPwd').reset(); toast('Password changed.'); start(); })
+    .catch(x => $('pErr').textContent = x.message);
+};
+
+function start() {
+  call('bootstrap', {}, 'Loading…').then(b => {
+    ME = b.user; CFG = b.config; UNITS = b.units; FACILITIES = b.facilities; TODAY = b.today; $('mFac').innerHTML = ''; MONTH = null;
+    if (ME.mustChange) return showForcePwd();
+    $('nav').classList.remove('hidden');
+    $('me').textContent = `${ME.fullName} · ${ME.roleLabel}`;
+    $('navAdmin').classList.toggle('hidden', ME.role !== 'ADMIN');
+    $('navMonth').classList.toggle('hidden', ME.role === 'SL');
+    $('navReg').classList.add('hidden');
+    initDash(); show('vDash'); loadDash();
+  }).catch(e => { if (e.code !== 'AUTH' && e.code !== 'MUST_CHANGE') { signOutLocal(e.message); } });
+}
+
+// ---------------------------------------------------------------- dashboard
+// Dependent dropdowns: Facility → Area → Unit (only what the user may access).
+const uniq = a => [...new Set(a)];
+const optList = (vals, sel, blank) => (blank ? `<option value="">${esc(blank)}</option>` : '') + vals.map(v => `<option${v === sel ? ' selected' : ''}>${esc(v)}</option>`).join('');
+function fillFac(sel) {
+  $('dFac').innerHTML = optList(FACILITIES, sel || FACILITIES[0]);
+  fillArea();
+}
+function fillArea(sel) {
+  const areas = uniq(UNITS.filter(u => u.facility === $('dFac').value).map(u => u.area));
+  $('dArea').innerHTML = areas.length ? optList(areas, sel || areas[0]) : '<option value="">No units assigned – contact the administrator</option>';
+  fillUnit();
+}
+function fillUnit(sel) {
+  const list = UNITS.filter(u => u.facility === $('dFac').value && u.area === $('dArea').value);
+  $('dUnit').innerHTML = list.length ? optList(list.map(u => u.unit), sel) : '<option value=""></option>';
+  try { localStorage.setItem('ecdoh_abs_pick', JSON.stringify({ f: $('dFac').value, a: $('dArea').value, u: $('dUnit').value })); } catch (x) {}
+}
+$('dFac').onchange = () => fillArea();
+$('dArea').onchange = () => fillUnit();
+$('dUnit').onchange = () => fillUnit($('dUnit').value);
+function initDash() {
+  const w = weekInfo(TODAY);
+  let last = {}; try { last = JSON.parse(localStorage.getItem('ecdoh_abs_pick') || '{}'); } catch (x) {}
+  const hit = UNITS.find(u => u.facility === last.f && u.area === last.a && u.unit === last.u);
+  fillFac(hit && hit.facility);
+  if (hit) { fillArea(hit.area); fillUnit(hit.unit); }
+  $('fArea').innerHTML = optList(uniq(UNITS.map(u => u.area)).sort(), '', 'All');
+  $('dMonth').value = w.month; fillWeeks(w.weekFrom);
+  $('fMonth').value = ''; $('fStatus').value = '';
+  const canCreate = ['OM', 'SL', 'ADMIN'].includes(ME.role);
+  $('dHint').textContent = canCreate ? 'A new register is started automatically if none exists for that unit and week.' : 'You can open registers that units have already started.';
+}
+function fillWeeks(select) {
+  const ws = weeksOfMonth($('dMonth').value);
+  $('dWeek').innerHTML = ws.map(w => `<option value="${w.weekFrom}"${w.weekFrom === select ? ' selected' : ''}>Week ${w.weekNo}: Mon ${fmtD(w.weekFrom)} – Sun ${fmtD(w.weekTo)}</option>`).join('');
+}
+$('dMonth').onchange = () => fillWeeks();
+$('bThisWeek').onclick = () => { const w = weekInfo(TODAY); $('dMonth').value = w.month; fillWeeks(w.weekFrom); };
+$('bOpenReg').onclick = () => {
+  const u = UNITS.find(x => x.facility === $('dFac').value && x.area === $('dArea').value && x.unit === $('dUnit').value);
+  if (!u) return toast('Choose an area and unit.', true);
+  if (!$('dWeek').value) return toast('Choose a week.', true);
+  call('openRegister', { facility: u.facility, unit: u.unit, weekFrom: $('dWeek').value }, 'Opening register…').then(openReg).catch(fail);
+};
+$('bRefresh').onclick = () => loadDash();
+$('fMonth').onchange = $('fStatus').onchange = $('fArea').onchange = () => loadDash();
+
+function regRow(r, cols) {
+  const late = r.submittedLate === 'Yes' ? ' <span class="pill late">LATE</span>' : '';
+  const signs = [r.completedBy && 'OM ✔', r.checkedBy && 'AM ✔', r.approvedBy && 'NM ✔'].filter(Boolean).join(' · ') || '–';
+  return `<tr><td class="l">${esc(r.unit)}<br><span class="muted">${esc(r.area)}${FACILITIES.length > 1 ? ' · ' + esc(r.facility) : ''}</span></td>
+    <td>${esc(r.monthLabel)}<br>Week ${r.weekNo}</td><td>${fmtD(r.weekFrom)} – ${fmtD(r.weekTo)}</td>
+    <td><span class="pill ${esc(r.status)}">${esc(r.status)}</span>${r.returnNote && r.status === 'Draft' ? '<br><span class="muted">returned</span>' : ''}</td>
+    ${cols ? `<td>${r.plan}</td><td>${r.actual}</td><td class="${r.plan ? band(r.pct) : ''}">${r.plan ? r.pct.toFixed(1) + '%' : '–'}</td><td>${signs}</td><td>${r.submittedAt ? fmtD(r.submittedAt) + late : ''}</td>` : ''}
+    <td class="noprint"><button class="sm" data-open="${esc(r.id)}">Open</button></td></tr>`;
+}
+function loadDash() {
+  call('listRegisters', { month: $('fMonth').value, status: $('fStatus').value }, 'Loading registers…').then(res => {
+    const head = '<thead><tr><th class="l">Unit</th><th>Week</th><th>Dates</th><th>Status</th><th>Planned</th><th>Actual</th><th>% Absent</th><th>Signed</th><th>Submitted</th><th class="noprint"></th></tr></thead>';
+    const area = $('fArea').value, regs = area ? res.registers.filter(r => r.area === area) : res.registers;
+    $('regList').innerHTML = head + '<tbody>' + (regs.map(r => regRow(r, true)).join('') || '<tr><td colspan="10" class="muted">No registers found.</td></tr>') + '</tbody>';
+    const todoHead = '<thead><tr><th class="l">Unit</th><th>Week</th><th>Dates</th><th>Status</th><th class="noprint"></th></tr></thead>';
+    $('todoSec').classList.toggle('hidden', !res.todo.length);
+    $('todoTbl').innerHTML = todoHead + '<tbody>' + res.todo.map(r => regRow(r, false)).join('') + '</tbody>';
+  }).catch(fail);
+}
+document.addEventListener('click', e => {
+  const id = e.target.dataset && e.target.dataset.open;
+  if (id) call('getRegister', { id }, 'Opening register…').then(openReg).catch(fail);
+});
+
+// ---------------------------------------------------------------- register
+function openReg(reg) {
+  REG = reg; D = JSON.parse(JSON.stringify(reg.data)); DIRTY = false;
+  $('navReg').classList.remove('hidden');
+  $('navReg').textContent = `Register: ${reg.unit} · Wk ${reg.weekNo}`;
+  show('vReg'); drawReg();
+}
+function drawReg() {
+  const R = REG, P = R.perms, ed = P.canEdit;
+  // notes
+  let notes = '';
+  if (R.returnNote && R.status === 'Draft') notes += `<div class="note"><b>Returned for correction:</b> ${esc(R.returnNote)}</div>`;
+  if (!ed && R.status === 'Draft') notes += `<div class="note info">This register is still being completed by the unit.</div>`;
+  if (R.status === 'Approved') notes += `<div class="note info">Approved and submitted – this register is locked.</div>`;
+  $('rNotes').innerHTML = notes;
+  // header (auto from week)
+  const hd = [['Hospital / Facility', R.facility], ['Area / Unit', (R.area ? R.area + ' – ' : '') + R.unit], ['Week number', R.weekNo], ['Month', R.monthLabel],
+              ['Week from (Monday)', fmtD(R.weekFrom)], ['Week to (Sunday)', fmtD(R.weekTo)],
+              ['Status', `<span class="pill ${esc(R.status)}">${esc(R.status)}</span>`], ['Due (nursing admin)', 'Tue ' + fmtD(R.due) + ', 12:00']];
+  $('rHead').innerHTML = hd.map(([l, v], i) => `<div><label>${l}</label><div class="ro">${i === 6 ? v : esc(v)}</div></div>`).join('');
+  // toolbar
+  $('bSave').classList.toggle('hidden', !ed); $('bCopy').classList.toggle('hidden', !ed); $('bAddAbs').classList.toggle('hidden', !ed);
+  $('bSheet').classList.toggle('hidden', !P.canPrintSheet);
+  $('comments').value = R.comments || ''; $('comments').disabled = !ed;
+  $('saveState').textContent = R.updatedAt ? `Last saved ${R.updatedAt} by ${R.updatedBy}` : '';
+  renderTable(); renderAbs(); drawSign(); calc();
+}
+function renderTable() {
+  const ed = REG.perms.canEdit, days = CFG.days;
+  let h = '<thead><tr><th rowspan="3">Category</th><th rowspan="3">Shift</th>';
+  days.forEach(d => h += `<th colspan="2">${d.toUpperCase()}</th>`);
+  h += '<th colspan="2">Week total</th><th rowspan="3">Absent<br>(P − A)</th><th rowspan="3">% Absent</th></tr><tr class="sub">';
+  D.dates.forEach(d => h += `<th colspan="2">${fmtD(d)}</th>`);
+  h += '<th colspan="2"></th></tr><tr class="sub">';
+  for (let i = 0; i < 8; i++) h += '<th>Plan</th><th>Actual</th>';
+  h += '</tr></thead><tbody>';
+  D.rows.forEach((r, ri) => {
+    h += `<tr><td class="cat">${esc(r.cat)}</td><td>${esc(r.shift)}</td>`;
+    for (let d = 0; d < 7; d++)
+      h += `<td><input class="n" inputmode="decimal" aria-label="${esc(r.cat)} ${r.shift} ${days[d]} plan" data-r="${ri}" data-t="p" data-d="${d}" value="${esc(r.p[d])}"${ed ? '' : ' disabled'}></td>` +
+           `<td><input class="n a" inputmode="decimal" aria-label="${esc(r.cat)} ${r.shift} ${days[d]} actual" data-r="${ri}" data-t="a" data-d="${d}" value="${esc(r.a[d])}"${ed ? '' : ' disabled'}></td>`;
+    h += `<td class="tot" id="rp${ri}"></td><td class="tot" id="ra${ri}"></td><td class="tot" id="rx${ri}"></td><td class="tot" id="rr${ri}"></td></tr>`;
+  });
+  h += '<tr class="dt"><td colspan="2" class="l">DAILY TOTAL</td>';
+  for (let d = 0; d < 7; d++) h += `<td id="dp${d}"></td><td id="da${d}"></td>`;
+  h += '<td class="tot" id="tP"></td><td class="tot" id="tA"></td><td class="tot" id="tX"></td><td class="tot" id="tR"></td></tr></tbody>';
+  $('reg').innerHTML = h;
+}
+function renderAbs() {
+  const ed = REG.perms.canEdit, dis = ed ? '' : ' disabled';
+  const opt = (list, v, blank) => (blank ? '<option value=""></option>' : '') + list.map(x => `<option${x === v ? ' selected' : ''}>${esc(x)}</option>`).join('');
+  let h = '<thead><tr><th>Date</th><th>Name &amp; surname</th><th>Category</th><th>Shift</th><th>Reason</th><th>Relief arranged?</th><th>Days</th><th class="noprint"></th></tr></thead><tbody>';
+  D.absences.forEach((a, i) => {
+    h += `<tr><td><select data-ab="${i}" data-k="date"${dis}><option value=""></option>${D.dates.map((d, j) => `<option value="${d}"${a.date === d ? ' selected' : ''}>${CFG.days[j]} ${fmtD(d)}</option>`).join('')}</select></td>
+      <td><input data-ab="${i}" data-k="name" maxlength="100" value="${esc(a.name)}"${dis}></td>
+      <td><select data-ab="${i}" data-k="cat"${dis}>${opt(CFG.categories, a.cat, true)}</select></td>
+      <td><select data-ab="${i}" data-k="shift"${dis}>${opt(CFG.shifts, a.shift)}</select></td>
+      <td><select data-ab="${i}" data-k="reason"${dis}>${opt(CFG.reasons, a.reason, true)}</select></td>
+      <td><select data-ab="${i}" data-k="relief"${dis}>${opt(['Yes', 'No'], a.relief, true)}</select></td>
+      <td><input data-ab="${i}" data-k="days" inputmode="decimal" value="${esc(a.days)}" style="width:60px"${dis}></td>
+      <td class="noprint">${ed ? `<button class="warn sm" data-del="${i}" title="Remove">✕</button>` : ''}</td></tr>`;
+  });
+  if (!D.absences.length) h += '<tr><td colspan="8" class="muted">No absences recorded.</td></tr>';
+  $('absTbl').innerHTML = h + '</tbody>';
+}
+
+/** Live calculation – mirrors evaluate_() on the server (server is authoritative at sign-off). */
+function evaluate() {
+  let P = 0, A = 0, blanks = 0; const dp = Array(7).fill(0), da = Array(7).fill(0), overs = [], rows = [];
+  D.rows.forEach(r => {
+    let p = 0, a = 0;
+    for (let d = 0; d < 7; d++) {
+      const pv = num(r.p[d]), av = num(r.a[d]); p += pv; a += av; dp[d] += pv; da[d] += av;
+      if (r.p[d] === '') blanks++; if (r.a[d] === '') blanks++;
+      if (av > pv) overs.push(`${r.cat} ${r.shift}, ${CFG.days[d]}`);
+    }
+    rows.push({ p, a }); P += p; A += a;
+  });
+  const R = pct(P, A), shortfall = r1(dp.reduce((s, v, i) => s + Math.max(0, v - da[i]), 0));
+  const listed = D.absences.reduce((s, a) => s + (num(a.days) || 1), 0), com = $('comments').value.trim();
+  const errors = [], warnings = [], ok = [], th = CFG.rules.absThreshold;
+  if (blanks) errors.push(`${blanks} blank cell(s) – enter 0 where no nurses were planned or on duty.`); else ok.push('No blank cells.');
+  if (overs.length) (com ? warnings : errors).push(`Actual higher than Plan (${overs.length}): ${overs.slice(0, 4).join('; ')}${overs.length > 4 ? '…' : ''} – explain in Comments.`);
+  if (shortfall && !D.absences.length) errors.push(`There is a shortfall of ${shortfall} shift(s) but no nurses are listed in Absence details.`);
+  else if (shortfall && listed < shortfall) warnings.push(`Absence details list ${listed} day(s) against a daily shortfall of ${shortfall} shift(s) – check every absent nurse is listed.`);
+  else if (shortfall) ok.push(`${D.absences.length} absence(s) listed against a shortfall of ${shortfall} shift(s).`);
+  if (D.absences.some(a => !a.date || !a.name || !a.cat || !a.reason)) errors.push('Some absence rows are missing the date, name, category or reason.');
+  if (R > th) (com.length >= CFG.rules.minCommentLength ? ok : errors).push(`Absenteeism ${R.toFixed(1)}% is above ${th}% – ${com.length >= CFG.rules.minCommentLength ? 'explanation provided.' : 'explain in Comments with the action taken.'}`);
+  return { P, A, R, dp, da, rows, shortfall, errors, warnings, ok };
+}
+function calc() {
+  const ev = evaluate(), ed = REG.perms.canEdit;
+  ev.rows.forEach((t, ri) => {
+    $('rp' + ri).textContent = r1(t.p); $('ra' + ri).textContent = r1(t.a); $('rx' + ri).textContent = r1(t.p - t.a);
+    const rr = pct(t.p, t.a); $('rr' + ri).textContent = t.p ? rr.toFixed(1) + '%' : '–'; $('rr' + ri).className = 'tot ' + band(rr);
+    for (let d = 0; d < 7; d++) {
+      const pi = document.querySelector(`[data-r="${ri}"][data-t="p"][data-d="${d}"]`), ai = document.querySelector(`[data-r="${ri}"][data-t="a"][data-d="${d}"]`);
+      const r = D.rows[ri];
+      pi.classList.toggle('empty', ed && r.p[d] === ''); ai.classList.toggle('empty', ed && r.a[d] === '');
+      ai.classList.toggle('over', num(r.a[d]) > num(r.p[d]));
+    }
+  });
+  for (let d = 0; d < 7; d++) { $('dp' + d).textContent = r1(ev.dp[d]); $('da' + d).textContent = r1(ev.da[d]); }
+  $('tP').textContent = r1(ev.P); $('tA').textContent = r1(ev.A); $('tX').textContent = r1(ev.P - ev.A);
+  $('tR').textContent = ev.P ? ev.R.toFixed(1) + '%' : '–'; $('tR').className = 'tot ' + band(ev.R);
+  $('kP').textContent = r1(ev.P); $('kA').textContent = r1(ev.A); $('kX').textContent = r1(ev.P - ev.A); $('kR').textContent = ev.R.toFixed(1) + '%';
+  $('kRbox').className = 'kpi ' + (ev.R > CFG.rules.absThreshold ? 'hi' : '');
+  $('absHint').textContent = ev.shortfall ? `Daily shortfall this week: ${ev.shortfall} shift(s) – each absent nurse should be listed.` : '';
+  const items = [].concat(ev.errors.map(t => ['err', '✖ ' + t]), ev.warnings.map(t => ['wrn', '! ' + t]), ev.ok.map(t => ['ok', '✔ ' + t]));
+  if (REG.status === 'Draft') items.push(['wrn', '! Not yet signed off by the Operational Manager.']);
+  else if (REG.status !== 'Approved') items.push(['wrn', '! Awaiting ' + (REG.status === 'Completed' ? 'Area Manager check' : 'Nursing Manager approval') + '.']);
+  if (REG.submittedLate === 'Yes') items.push(['wrn', `! Submitted after the due time (Tue ${fmtD(REG.due)} 12:00).`]);
+  $('checks').innerHTML = items.map(([k, t]) => `<li class="${k}">${esc(t)}</li>`).join('');
+  return ev;
+}
+function markDirty() { DIRTY = true; $('saveState').textContent = 'Unsaved changes'; }
+
+// table + absence events
+$('reg').addEventListener('input', e => {
+  const ds = e.target.dataset; if (ds.r === undefined) return;
+  D.rows[ds.r][ds.t][ds.d] = e.target.value.trim().replace(',', '.'); markDirty(); calc();
+});
+$('reg').addEventListener('keydown', e => { // Enter moves down the column
+  const ds = e.target.dataset; if (e.key !== 'Enter' || ds.r === undefined) return;
+  e.preventDefault(); const nx = document.querySelector(`[data-r="${+ds.r + 1}"][data-t="${ds.t}"][data-d="${ds.d}"]`); if (nx) nx.focus();
+});
+$('absTbl').addEventListener('input', e => { const ds = e.target.dataset; if (ds.ab === undefined) return; D.absences[ds.ab][ds.k] = e.target.value; markDirty(); calc(); });
+$('absTbl').addEventListener('change', e => { const ds = e.target.dataset; if (ds.ab === undefined) return; D.absences[ds.ab][ds.k] = e.target.value; markDirty(); calc(); });
+$('absTbl').addEventListener('click', e => { const i = e.target.dataset.del; if (i === undefined) return; D.absences.splice(+i, 1); markDirty(); renderAbs(); calc(); });
+$('bAddAbs').onclick = () => { D.absences.push({ date: '', name: '', cat: '', shift: 'Day', reason: '', relief: '', days: '1' }); markDirty(); renderAbs(); calc(); };
+$('comments').addEventListener('input', () => { markDirty(); calc(); });
+$('bCopy').onclick = () => { D.rows.forEach(r => r.a = r.p.slice()); markDirty(); renderTable(); calc(); toast('Plan copied to Actual – now change the days with absences.'); };
+$('bBack').onclick = () => { if (show('vDash')) loadDash(); };
+
+function saveReg() {
+  return call('saveRegister', { id: REG.id, version: REG.version, data: D, comments: $('comments').value }, 'Saving…')
+    .then(r => { openReg(r); toast('Saved.'); return r; });
+}
+$('bSave').onclick = () => saveReg().catch(handleRegError);
+document.addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key === 's' && REG && REG.perms.canEdit && !$('vReg').classList.contains('hidden')) { e.preventDefault(); $('bSave').click(); } });
+window.addEventListener('beforeunload', e => { if (DIRTY) { e.preventDefault(); e.returnValue = ''; } });
+
+function handleRegError(e) {
+  if (e.code === 'VALIDATION' || e.code === 'CONFLICT') {
+    dialog(e.code === 'CONFLICT' ? 'Register changed by someone else' : 'Cannot sign yet', `<p style="white-space:pre-line">${esc(e.message)}</p>`, [{ label: 'Reload register', value: true }])
+      .then(() => { DIRTY = false; call('getRegister', { id: REG.id }).then(openReg).catch(fail); });
+  } else fail(e);
+}
+
+$('bPdf').onclick = async () => {
+  try {
+    if (DIRTY && REG.perms.canEdit) await saveReg();
+    const r = await call('registerPdf', { id: REG.id }, 'Creating PDF…');
+    const bytes = Uint8Array.from(atob(r.base64), c => c.charCodeAt(0));
+    download(r.filename, new Blob([bytes], { type: 'application/pdf' }));
+  } catch (e) { handleRegError(e); }
+};
+$('bSheet').onclick = () => call('registerSheet', { id: REG.id }, 'Building Google Sheet…').then(r => { window.open(r.url, '_blank'); toast('Sheet ready: ' + r.name); }).catch(fail);
+
+// ---------------------------------------------------------------- sign-off
+function drawSign() {
+  const R = REG, P = R.perms;
+  const box = (label, who, when, extra) => `<div><label>${label}</label>${who ? `<div class="who">✔ ${esc(who)}</div><div class="when">${esc(when)}</div>` : '<div class="pending">Not signed</div>'}${extra || ''}</div>`;
+  const sub = R.submittedAt ? `<div class="who">${fmtD(R.submittedAt)} ${esc(R.submittedAt.slice(11))}</div><div class="when">${R.submittedLate === 'Yes' ? '<span class="pill late">LATE</span>' : 'On time'}</div>` : '<div class="pending">Recorded automatically at approval</div>';
+  $('signBox').innerHTML = box('Completed by (Operational Manager)', R.completedBy, R.completedAt) + box('Checked by (Area Manager)', R.checkedBy, R.checkedAt) +
+    box('Approved by (Nursing Manager)', R.approvedBy, R.approvedAt) + `<div><label>Date submitted</label>${sub}<div class="rules">Due 12:00 Tue ${fmtD(R.due)}</div></div>`;
+  let b = '';
+  if (P.canComplete) b += `<button class="sign" data-step="complete">Complete &amp; sign as Operational Manager</button>`;
+  if (P.canCheck) b += `<button class="sign" data-step="check">Check &amp; sign as Area Manager</button>`;
+  if (P.canApprove) b += `<button class="sign" data-step="approve">Approve &amp; submit as Nursing Manager</button>`;
+  if (P.canReturn) b += `<button class="warn" data-step="return">Return for correction</button>`;
+  if (P.canReopen) b += `<button class="warn" data-step="reopen">Reopen (admin)</button>`;
+  if (R.status === 'Draft' && ME.role === 'SL') b += '<span class="rules">Shift leaders capture figures; the Operational Manager signs.</span>';
+  $('signActions').innerHTML = b;
+}
+$('signActions').addEventListener('click', async e => {
+  const step = e.target.dataset.step; if (!step) return;
+  if (step === 'return' || step === 'reopen') {
+    const r = await dialog(step === 'return' ? 'Return for correction' : 'Reopen approved register',
+      `<p>${step === 'return' ? 'The register goes back to the Operational Manager as a draft and earlier signatures are cleared.' : 'All signatures will be cleared and the unit must sign again.'}</p><textarea id="dlgNote" placeholder="What needs to be corrected?"></textarea>`,
+      [{ label: step === 'return' ? 'Return' : 'Reopen', cls: 'warn', value: true }, { label: 'Cancel', cls: 'alt', value: false }]);
+    if (!r.value) return;
+    const note = r.body.querySelector('#dlgNote').value;
+    return call(step === 'return' ? 'returnRegister' : 'reopenRegister', { id: REG.id, note }, 'Saving…').then(x => { openReg(x); toast('Register returned to draft.'); }).catch(fail);
+  }
+  if (step === 'complete') {
+    const ev = calc();
+    if (ev.errors.length) return dialog('Fix these before signing', '<ul class="checks">' + ev.errors.map(t => `<li class="err">✖ ${esc(t)}</li>`).join('') + '</ul>', [{ label: 'OK', value: true }]);
+  }
+  const text = { complete: 'I confirm the figures are taken from the approved duty roster and attendance, and every absent nurse is listed.',
+                 check: 'I have checked the figures and totals of this register.',
+                 approve: 'I approve this register. It will be recorded as submitted to nursing administration now.' }[step];
+  if (!await confirmBox('Sign as ' + ME.fullName, esc(text), 'Sign')) return;
+  const payload = { id: REG.id, version: REG.version, step };
+  if (step === 'complete') { payload.data = D; payload.comments = $('comments').value; }
+  call('signRegister', payload, 'Signing…').then(x => { openReg(x); toast('Signed by ' + ME.fullName + '.'); }).catch(handleRegError);
+});
+
+// ---------------------------------------------------------------- monthly roll-up
+function fillMonthAreas() {
+  const areas = uniq(UNITS.filter(u => u.facility === $('mFac').value).map(u => u.area)).sort();
+  const cur = $('mArea').value;
+  $('mArea').innerHTML = optList(areas, cur, 'All areas');
+}
+$('mFac').onchange = () => { fillMonthAreas(); loadMonth(); };
+$('mArea').onchange = () => loadMonth();
+function initMonth() {
+  if (!$('mFac').options.length) $('mFac').innerHTML = FACILITIES.map(f => `<option>${esc(f)}</option>`).join('') || '<option value="">No hospital assigned</option>';
+  fillMonthAreas();
+  if (!$('mMonth').value) $('mMonth').value = weekInfo(TODAY).month;
+  $('bMSheet').classList.toggle('hidden', !['ADMIN', 'INFO'].includes(ME.role));
+  loadMonth();
+}
+$('bMLoad').onclick = () => loadMonth();
+function totRow(label, t, cls) {
+  return `<tr class="${cls}"><td colspan="4" style="text-align:right">${esc(label)}</td><td>${t.plan}</td><td>${t.actual}</td><td>${t.absent}</td><td class="${band(t.pct)}">${t.plan ? t.pct.toFixed(1) + '%' : '–'}</td><td colspan="4"></td></tr>`;
+}
+function loadMonth() {
+  if (!$('mFac').value) return;
+  call('monthlyRollup', { facility: $('mFac').value, area: $('mArea').value, month: $('mMonth').value }, 'Building roll-up…').then(M => {
+    MONTH = M;
+    const t = M.total;
+    $('mKpis').classList.remove('hidden');
+    $('mKpis').innerHTML = `<h2>${esc(M.facility)}${M.area ? ' – ' + esc(M.area) : ''} – ${esc(M.monthLabel)}</h2><div class="kpis">
+      <div class="kpi"><div class="l">Total planned</div><div class="v">${t.plan}</div></div>
+      <div class="kpi"><div class="l">Total actual</div><div class="v">${t.actual}</div></div>
+      <div class="kpi ${t.pct > 10 ? 'hi' : ''}"><div class="l">% absent${M.area ? '' : ' (all areas)'}</div><div class="v">${t.pct.toFixed(1)}%</div></div>
+      <div class="kpi ${M.approved < M.expected ? 'hi' : ''}"><div class="l">Registers approved</div><div class="v">${M.approved} / ${M.expected}</div></div></div>` +
+      (M.areas.length > 1 ? `<div class="scroll" style="margin-top:12px"><table><thead><tr><th class="l">Area</th><th>Units</th><th>Planned</th><th>Actual</th><th>Absent</th><th>% Absent</th></tr></thead><tbody>` +
+        M.areas.map(a => `<tr><td class="l"><b>${esc(a.area)}</b></td><td>${a.units}</td><td>${a.plan}</td><td>${a.actual}</td><td>${a.absent}</td><td class="${band(a.pct)}">${a.plan ? a.pct.toFixed(1) + '%' : '–'}</td></tr>`).join('') + '</tbody></table></div>' : '');
+    let h = '<thead><tr><th class="l">Area</th><th class="l">Unit</th><th>Week</th><th>Dates</th><th>Planned</th><th>Actual</th><th>Absent</th><th>% Absent</th><th>Absences listed</th><th>Status</th><th>Submitted</th><th class="noprint"></th></tr></thead><tbody>';
+    M.units.forEach((u, i) => {
+      u.weeks.forEach(w => {
+        const lead = `<td class="l">${esc(u.area)}</td><td class="l">${esc(u.unit)}</td><td>${w.weekNo}</td><td>${fmtD(w.weekFrom)} – ${fmtD(w.weekTo)}</td>`;
+        if (w.missing) h += `<tr class="miss">${lead}<td colspan="5">Not captured</td><td>–</td><td></td><td class="noprint"></td></tr>`;
+        else h += `<tr>${lead}<td>${w.plan}</td><td>${w.actual}</td><td>${w.absent}</td>
+          <td class="${w.plan ? band(w.pct) : ''}">${w.plan ? w.pct.toFixed(1) + '%' : '–'}</td><td>${w.absences}</td><td><span class="pill ${esc(w.status)}">${esc(w.status)}</span></td>
+          <td>${w.submittedAt ? fmtD(w.submittedAt) : ''}${w.submittedLate === 'Yes' ? ' <span class="pill late">LATE</span>' : ''}</td><td class="noprint"><button class="sm" data-open="${esc(w.id)}">Open</button></td></tr>`;
+      });
+      h += totRow(`${u.unit} – month total`, u, 'dt');
+      const next = M.units[i + 1];
+      if (!next || next.area !== u.area) { const a = M.areas.find(x => x.area === u.area); if (a) h += totRow(`${u.area} – AREA TOTAL`, a, 'dt area'); }
+    });
+    if (!M.units.length) h += '<tr><td colspan="12" class="muted">No units in this selection.</td></tr>';
+    $('monTbl').innerHTML = h + '</tbody>';
+  }).catch(fail);
+}
+$('bMCsv').onclick = () => {
+  if (!MONTH) return;
+  const out = [['Facility', 'Month', 'Area', 'Unit', 'Week', 'From', 'To', 'Planned', 'Actual', 'Absent', '% Absent', 'Absences listed', 'Status', 'Completed by', 'Checked by', 'Approved by', 'Submitted', 'Late']];
+  MONTH.units.forEach(u => u.weeks.forEach(w => out.push(w.missing
+    ? [MONTH.facility, MONTH.month, u.area, u.unit, w.weekNo, w.weekFrom, w.weekTo, '', '', '', '', '', 'Not captured']
+    : [MONTH.facility, MONTH.month, u.area, u.unit, w.weekNo, w.weekFrom, w.weekTo, w.plan, w.actual, w.absent, w.pct.toFixed(1), w.absences, w.status, w.completedBy, w.checkedBy, w.approvedBy, w.submittedAt, w.submittedLate])));
+  download(`Absenteeism_${MONTH.facility.replace(/\W+/g, '_')}${MONTH.area ? '_' + MONTH.area.replace(/\W+/g, '_') : ''}_${MONTH.month}.csv`, new Blob([csv(out)], { type: 'text/csv' }));
+};
+$('bMSheet').onclick = () => call('monthlySheet', { facility: $('mFac').value, month: $('mMonth').value }, 'Building Google Sheet…')
+  .then(r => { window.open(r.url, '_blank'); toast('Created: ' + r.name); }).catch(fail);
+
+// ---------------------------------------------------------------- admin
+let ADM_UNITS = [], ADM_USERS = [], EDIT_USER = null;
+function loadAdmin() {
+  Promise.resolve()
+    .then(() => call('listUnits', {}, 'Loading…')).then(u => { ADM_UNITS = u; drawUnits(); })
+    .then(() => call('listUsers', {}, 'Loading…')).then(u => { ADM_USERS = u; drawUsers(); })
+    .catch(fail);
+}
+/** Hospitals for dropdowns: configured list + any hospital that already has units + ones added this session. */
+let EXTRA_HOSPITALS = [];
+const hospitals = () => uniq([...(CFG.hospitals || []), ...ADM_UNITS.map(u => u.facility), ...EXTRA_HOSPITALS]).sort();
+function fillHospitalSelect(sel) {
+  const list = hospitals(), cur = sel || $('uFac').value || list[0] || '';
+  $('uFac').innerHTML = optList(list, cur) + '<option value="__new">+ Add hospital…</option>';
+  if (!list.length) $('uFac').value = '__new';
+}
+$('uFac').onchange = async () => {
+  if ($('uFac').value !== '__new') return;
+  const r = await dialog('Add hospital', '<div class="field"><label for="dlgHosp">Hospital name</label><input id="dlgHosp" placeholder="e.g. Dora Nginza Hospital"></div><p class="rules">The hospital is saved when you add or import its first unit.</p>',
+    [{ label: 'Add', value: true }, { label: 'Cancel', cls: 'alt', value: false }]);
+  const name = r.value ? r.body.querySelector('#dlgHosp').value.trim().replace(/\s+/g, ' ') : '';
+  if (name && !hospitals().includes(name)) EXTRA_HOSPITALS.push(name);
+  fillHospitalSelect(name || hospitals()[0]);
+};
+function drawUnits() {
+  const facs = uniq(ADM_UNITS.map(u => u.facility));
+  fillHospitalSelect();
+  $('areaList').innerHTML = uniq(ADM_UNITS.map(u => u.area)).sort().map(a => `<option value="${esc(a)}">`).join('');
+  const q = $('uFilter').value.trim().toLowerCase();
+  const rows = ADM_UNITS.map((u, i) => [u, i]).filter(([u]) => !q || (u.facility + ' ' + u.area + ' ' + u.unit).toLowerCase().includes(q));
+  $('unitTbl').innerHTML = `<thead><tr>${facs.length > 1 ? '<th class="l">Facility</th>' : ''}<th class="l">Area</th><th class="l">Unit</th><th>Active</th><th></th></tr></thead><tbody>` +
+    (rows.map(([u, i]) => `<tr>${facs.length > 1 ? `<td class="l">${esc(u.facility)}</td>` : ''}<td class="l">${esc(u.area)}</td><td class="l">${esc(u.unit)}</td><td>${u.active ? '✔' : '✖'}</td>
+      <td style="white-space:nowrap"><button class="sm alt" data-uedit2="${i}">Edit</button> <button class="sm ${u.active ? 'warn' : 'alt'}" data-utoggle="${i}">${u.active ? 'Deactivate' : 'Activate'}</button></td></tr>`).join('')
+     || `<tr><td colspan="5" class="muted">${ADM_UNITS.length ? 'No match.' : 'No units yet – import the reporting units CSV or add them one by one.'}</td></tr>`) + '</tbody>';
+}
+$('uFilter').oninput = drawUnits;
+function afterUnits(r, msg) { ADM_UNITS = r.units; drawUnits(); refreshScope(); if (msg) toast(msg); }
+$('bAddUnit').onclick = () => $('uFac').value === '__new' ? toast('Choose a hospital.', true) : call('saveUnit', { facility: $('uFac').value, area: $('uArea').value, unit: $('uUnit').value, active: true }, 'Saving…')
+  .then(r => { afterUnits(r, r.result.added ? 'Unit added.' : r.result.updated ? 'Unit updated.' : 'No change.'); $('uUnit').value = ''; }).catch(fail);
+$('unitTbl').addEventListener('click', e => {
+  const t = e.target.dataset;
+  if (t.uedit2 !== undefined) { const u = ADM_UNITS[t.uedit2]; fillHospitalSelect(u.facility); $('uArea').value = u.area; $('uUnit').value = u.unit; $('uArea').focus(); return; }
+  if (t.utoggle === undefined) return; const u = ADM_UNITS[t.utoggle];
+  call('saveUnit', { facility: u.facility, area: u.area, unit: u.unit, active: !u.active }, 'Saving…').then(r => afterUnits(r)).catch(fail);
+});
+
+/** Parse "Area;Unit Name" (or comma-separated) with a header row; quotes allowed. */
+function parseUnitsCsv(text) {
+  const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/).filter(l => l.trim());
+  if (!lines.length) return [];
+  const sep = (lines[0].match(/;/g) || []).length >= (lines[0].match(/,/g) || []).length ? ';' : ',';
+  const split = l => { const o = []; let cur = '', q = false;
+    for (let i = 0; i < l.length; i++) { const ch = l[i];
+      if (q) { if (ch === '"' && l[i + 1] === '"') { cur += '"'; i++; } else if (ch === '"') q = false; else cur += ch; }
+      else if (ch === '"') q = true; else if (ch === sep) { o.push(cur.trim()); cur = ''; } else cur += ch; }
+    o.push(cur.trim()); return o; };
+  const head = split(lines[0]).map(h => h.toLowerCase());
+  let hi = head.findIndex(h => h === 'hospital' || h === 'facility'), ai = head.findIndex(h => h === 'area'), ui = head.findIndex(h => h.startsWith('unit'));
+  let body = lines.slice(1);
+  if (ai < 0 || ui < 0) { hi = -1; ai = 0; ui = 1; body = lines; } // no header – assume Area, Unit
+  return body.map(split).map(c => ({ facility: hi >= 0 ? c[hi] || '' : '', area: c[ai] || '', unit: c[ui] || '' })).filter(r => r.area && r.unit);
+}
+$('bImpUnits').onclick = () => $('fImpUnits').click();
+$('fImpUnits').onchange = async e => {
+  const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+  const rows = parseUnitsCsv(await f.text());
+  if (!rows.length) return toast('No Area / Unit rows found in ' + f.name + '.', true);
+  const fallback = $('uFac').value === '__new' ? '' : $('uFac').value;
+  if (rows.some(r => !r.facility) && !fallback) return toast('This file has no Hospital column – choose the hospital first.', true);
+  const areas = uniq(rows.map(r => r.area)), hosp = uniq(rows.map(r => r.facility || fallback));
+  if (!await confirmBox('Import units', `Import <b>${rows.length}</b> units in <b>${areas.length}</b> area(s) (${areas.map(esc).join(', ')}) into <b>${hosp.map(esc).join(', ')}</b>?`, 'Import')) return;
+  call('importUnits', { facility: fallback, rows }, 'Importing units…')
+    .then(r => afterUnits(r, `${r.result.added} unit(s) added, ${r.result.updated} updated.`)).catch(fail);
+};
+function refreshScope() { call('bootstrap', {}).then(b => { UNITS = b.units; FACILITIES = b.facilities; initDash(); $('mFac').innerHTML = ''; }).catch(() => {}); }
+
+function drawUsers() {
+  $('userTbl').innerHTML = '<thead><tr><th class="l">Username</th><th class="l">Full name</th><th>Role</th><th>Facility</th><th class="l">Units</th><th>Active</th><th>Last login</th><th></th></tr></thead><tbody>' +
+    ADM_USERS.map((u, i) => `<tr><td class="l">${esc(u.username)}${u.mustChange ? ' <span class="pill">temp pwd</span>' : ''}</td><td class="l">${esc(u.fullName)}</td>
+      <td>${esc(CFG.roles[u.role] || u.role)}</td><td>${u.facility === '*' ? 'All hospitals' : esc(u.facility)}</td><td class="l">${u.units === '*' ? 'All units' : esc(u.units)}</td>
+      <td>${u.active ? '✔' : '✖'}</td><td>${esc(u.lastLogin)}</td>
+      <td><button class="sm alt" data-uedit="${i}">Edit</button> <button class="sm warn" data-ureset="${i}">Reset password</button></td></tr>`).join('') + '</tbody>';
+}
+function showSecret(title, user, pwd) {
+  return dialog(title, `<p>Give these details to <b>${esc(user)}</b> in person or by a secure channel. They will be asked to choose their own password at first sign-in. This password will not be shown again.</p>
+    <p>Username: <span class="secret">${esc(user)}</span></p><p>Temporary password: <span class="secret">${esc(pwd)}</span></p>`, [{ label: 'Done', value: true }]);
+}
+$('userTbl').addEventListener('click', async e => {
+  const ed = e.target.dataset.uedit, rs = e.target.dataset.ureset;
+  if (ed !== undefined) openUser(ADM_USERS[ed]);
+  if (rs !== undefined) {
+    const u = ADM_USERS[rs];
+    if (!await confirmBox('Reset password', `Create a new temporary password for <b>${esc(u.username)}</b>?`, 'Reset')) return;
+    call('resetPassword', { username: u.username }, 'Resetting…').then(r => showSecret('Password reset', u.username, r.tempPassword)).then(loadAdmin).catch(fail);
+  }
+});
+$('bNewUser').onclick = () => openUser(null);
+function openUser(u) {
+  EDIT_USER = u; $('umErr').textContent = '';
+  $('umTitle').textContent = u ? 'Edit user' : 'New user';
+  $('umUser').value = u ? u.username : ''; $('umUser').disabled = !!u;
+  $('umName').value = u ? u.fullName : ''; $('umEmail').value = u ? u.email : '';
+  $('umRole').innerHTML = Object.entries(CFG.roles).map(([k, v]) => `<option value="${k}"${u && u.role === k ? ' selected' : ''}>${esc(v)}</option>`).join('');
+  const facs = uniq(ADM_UNITS.map(x => x.facility)).sort();
+  $('umFac').innerHTML = '<option value="*">All hospitals</option>' + facs.map(f => `<option${u && u.facility === f ? ' selected' : ''}>${esc(f)}</option>`).join('');
+  if (u && u.facility === '*') $('umFac').value = '*'; else if (!u && facs.length) $('umFac').value = facs[0];
+  $('umActive').checked = u ? u.active : true;
+  $('umAll').checked = u ? u.units === '*' : false;
+  drawUnitPick(u && u.units !== '*' ? u.units.split(',').map(s => s.trim()) : []);
+  $('userModal').classList.remove('hidden');
+}
+const AREA_PREFIX = 'Area: ';
+function drawUnitPick(selected) {
+  const fac = $('umFac').value, all = $('umAll').checked;
+  const list = ADM_UNITS.filter(x => x.active && (fac === '*' || x.facility === fac));
+  const areas = uniq(list.map(x => x.area)).sort();
+  $('umUnits').innerHTML = areas.map(a => {
+    const whole = all || selected.includes(AREA_PREFIX + a);
+    const us = list.filter(x => x.area === a);
+    return `<div class="agrp"><label><input type="checkbox" class="aChk" value="${esc(AREA_PREFIX + a)}"${whole ? ' checked' : ''}${all ? ' disabled' : ''}> ${esc(a)} – whole area (${us.length})</label>
+      <div class="us">${us.map(x => `<label><input type="checkbox" class="uChk" value="${esc(x.unit)}"${whole || selected.includes(x.unit) ? ' checked' : ''}${whole ? ' disabled' : ''}> ${esc(x.unit)}${fac === '*' ? ' <span class="muted">(' + esc(x.facility) + ')</span>' : ''}</label>`).join('')}</div></div>`;
+  }).join('') || '<span class="muted">No units for this facility.</span>';
+}
+/** Whole areas are saved as "Area: <name>" (covers units added later); otherwise individual units. */
+const pickedUnits = () => {
+  const areas = [...$('umUnits').querySelectorAll('.aChk:checked')].map(i => i.value);
+  const units = [...$('umUnits').querySelectorAll('.uChk:checked:not(:disabled)')].map(i => i.value);
+  return areas.concat(units);
+};
+$('umUnits').addEventListener('change', e => { if (e.target.classList.contains('aChk')) drawUnitPick(pickedUnits()); });
+$('umFac').onchange = () => drawUnitPick(pickedUnits());
+$('umAll').onchange = () => drawUnitPick(pickedUnits());
+$('umCancel').onclick = () => $('userModal').classList.add('hidden');
+$('umSave').onclick = () => {
+  const p = { isNew: !EDIT_USER, username: $('umUser').value, fullName: $('umName').value, email: $('umEmail').value, role: $('umRole').value,
+              facility: $('umFac').value, units: $('umAll').checked ? '*' : pickedUnits(), active: $('umActive').checked };
+  call('saveUser', p, 'Saving user…').then(r => {
+    $('userModal').classList.add('hidden'); ADM_USERS = r.users; drawUsers();
+    if (r.tempPassword) showSecret('User created', p.username.toLowerCase(), r.tempPassword); else toast('User saved.');
+  }).catch(e => $('umErr').textContent = e.message);
+};
+
+// ---------------------------------------------------------------- boot
+if (TOKEN) start(); else show('vLogin');
+</script>

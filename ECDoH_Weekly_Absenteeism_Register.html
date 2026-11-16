@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Weekly Nursing Attendance &amp; Absenteeism Register – ECDoH</title>
+<style>
+  :root { --green:#0B6B3A; --green2:#0E8048; --yellow:#F2B705; --light:#E8F3EC; --fill:#FFFDF2; --grey:#5f6b66; --line:#cfd8d3; --bad:#F8D7DA; --warn:#FDEFC3; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:Arial, Helvetica, sans-serif; color:#1d2622; background:#f3f6f4; font-size:13px; }
+  .page { max-width:1280px; margin:18px auto; background:#fff; border-radius:8px; box-shadow:0 2px 10px rgba(0,0,0,.08); overflow:hidden; }
+  header { display:flex; align-items:center; justify-content:space-between; padding:12px 24px; border-bottom:5px solid var(--green); }
+  header img { height:54px; }
+  header .ttl { text-align:right; }
+  header h1 { margin:0; font-size:19px; color:var(--green); }
+  header p { margin:4px 0 0; color:var(--grey); font-size:12px; }
+  .band { height:4px; background:var(--yellow); }
+  nav { display:flex; gap:4px; padding:10px 24px 0; border-bottom:1px solid var(--line); }
+  nav button { background:#fff; color:var(--green); border:1px solid var(--line); border-bottom:0; border-radius:6px 6px 0 0; padding:8px 16px; }
+  nav button.on { background:var(--green); color:#fff; border-color:var(--green); }
+  section { padding:14px 24px; }
+  h2 { color:var(--green); font-size:15px; margin:8px 0 10px; border-bottom:2px solid var(--yellow); padding-bottom:4px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:10px 14px; background:var(--light); border-radius:6px; padding:12px; }
+  .grid label { display:block; font-weight:bold; color:var(--green); font-size:11px; text-transform:uppercase; margin-bottom:3px; }
+  input, select, textarea { font-family:inherit; font-size:13px; }
+  .grid input, .grid select { width:100%; padding:6px 8px; border:1px solid var(--line); border-radius:4px; background:var(--fill); }
+  .toolbar { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; align-items:center; }
+  button { background:var(--green); color:#fff; border:0; border-radius:4px; padding:7px 13px; font-size:13px; cursor:pointer; }
+  button:hover { filter:brightness(1.08); }
+  button.alt { background:#fff; color:var(--green); border:1px solid var(--green); }
+  button.warn { background:#fff; color:#a12a2a; border:1px solid #a12a2a; }
+  button.sm { padding:3px 8px; font-size:12px; }
+  .msg { color:var(--green); font-weight:bold; }
+  .scroll { overflow-x:auto; }
+  table { border-collapse:collapse; width:100%; }
+  th, td { border:1px solid var(--line); padding:3px; text-align:center; }
+  thead th { background:var(--green); color:#fff; font-size:11px; }
+  thead tr.sub th { background:var(--light); color:var(--green); }
+  thead input[type=date] { width:100%; min-width:0; font-size:11px; padding:2px; border:1px solid var(--line); border-radius:3px; }
+  td.cat { text-align:left; min-width:150px; }
+  td.cat input { width:100%; border:1px solid var(--line); border-radius:3px; padding:4px; background:var(--fill); }
+  td.cat b { display:block; padding:4px; }
+  td select { font-size:12px; padding:3px; border:1px solid var(--line); border-radius:3px; }
+  td input.n { width:34px; padding:4px 2px; text-align:center; border:1px solid #d9e2dd; border-radius:3px; }
+  td input.n.a { background:#fbfdf9; }
+  td input.n.over { background:var(--bad); border-color:#c0392b; }
+  td input.n.empty { background:#fff7e0; }
+  td.tot { background:var(--light); font-weight:bold; min-width:48px; }
+  tr.dt td { background:#f6f9f7; font-weight:bold; }
+  .hi { background:var(--bad) !important; } .mid { background:var(--warn) !important; }
+  .kpis { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; }
+  .kpi { border:1px solid var(--line); border-left:5px solid var(--green); border-radius:6px; padding:10px 14px; }
+  .kpi .v { font-size:24px; font-weight:bold; color:var(--green); }
+  .kpi .l { color:var(--grey); font-size:11px; text-transform:uppercase; }
+  .kpi.hi .v { color:#a12a2a; }
+  table.abs td input, table.abs td select { width:100%; padding:4px; border:1px solid var(--line); border-radius:3px; }
+  textarea { width:100%; min-height:70px; border:1px solid var(--line); border-radius:4px; padding:8px; background:var(--fill); }
+  .checks { list-style:none; padding:0; margin:0; }
+  .checks li { padding:6px 10px; border-radius:4px; margin-bottom:4px; }
+  .checks li.ok { background:var(--light); color:var(--green); }
+  .checks li.err { background:var(--bad); color:#7a1f1f; }
+  .checks li.wrn { background:var(--warn); color:#6b4f00; }
+  .sign { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; }
+  .sign div { border:1px solid var(--line); border-radius:6px; padding:8px; }
+  .sign label { font-size:11px; font-weight:bold; color:var(--green); text-transform:uppercase; display:block; margin-bottom:4px; }
+  .sign input { width:100%; padding:5px; border:1px solid var(--line); border-radius:3px; margin-bottom:5px; background:var(--fill); }
+  .rules { color:var(--grey); font-size:12px; font-style:italic; margin:6px 0 0; }
+  footer { display:flex; justify-content:space-between; padding:10px 24px; border-top:4px solid var(--yellow); color:var(--grey); font-size:11px; font-style:italic; }
+  .hidden { display:none; }
+  .drop { border:2px dashed var(--line); border-radius:6px; padding:16px; text-align:center; color:var(--grey); margin-bottom:10px; }
+  @media print {
+    body { background:#fff; font-size:10px; } .page { box-shadow:none; margin:0; max-width:none; border-radius:0; }
+    .toolbar, nav, .noprint, button { display:none !important; }
+    input, select, textarea { border:0 !important; background:transparent !important; appearance:none; -webkit-appearance:none; }
+    td input.n { width:24px; font-size:10px; } .kpi .v { font-size:16px; }
+    table, .kpis, .sign { break-inside:avoid; } @page { size:A4 landscape; margin:8mm; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <img src="data:image/png;base64,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" alt="Province of the Eastern Cape – Health">
+    <div class="ttl">
+      <h1>WEEKLY NURSING ATTENDANCE &amp; ABSENTEEISM REGISTER</h1>
+      <p>One register per unit, per week (Monday–Sunday change-over) · completed in line with the SOP</p>
+    </div>
+  </header>
+  <div class="band"></div>
+  <nav class="noprint">
+    <button class="on" data-tab="tWeek">Weekly register</button>
+    <button data-tab="tMonth">Monthly roll-up</button>
+  </nav>
+
+  <!-- ================= WEEKLY ================= -->
+  <div id="tWeek">
+    <section>
+      <div class="grid">
+        <div><label>Hospital / Facility</label><input id="facility"></div>
+        <div><label>Ward / Unit</label><input id="unit"></div>
+        <div><label>Week number</label><input id="weekNo" type="number" min="1" max="6"></div>
+        <div><label>Month</label><input id="month" placeholder="e.g. January 2026"></div>
+        <div><label>Week from (Monday)</label><input id="from" type="date"></div>
+        <div><label>Week to (Sunday)</label><input id="to" type="date"></div>
+      </div>
+      <div class="toolbar">
+        <button id="bSave">Save</button>
+        <button class="alt" id="bOpen">Open saved</button>
+        <button class="alt" id="bImp">Import (JSON / CSV)</button>
+        <button class="alt" id="bJson">Export file (JSON)</button>
+        <button class="alt" id="bCsv">Export CSV</button>
+        <button class="alt" id="bCopy">Copy Plan → Actual</button>
+        <button class="alt" onclick="window.print()">Print / PDF</button>
+        <button class="warn" id="bNew">New week</button>
+        <input type="file" id="fImp" accept=".json,.csv" hidden>
+        <span class="msg" id="msg"></span>
+      </div>
+    </section>
+
+    <section>
+      <h2>1. Daily register (number of nurses)</h2>
+      <div class="scroll"><table id="reg"></table></div>
+      <p class="rules">Counting: 7–7 shifts = 1 · 7–1 / 1–7 shifts = 0.5 · Students not counted · Enter 0, never leave blank.</p>
+    </section>
+
+    <section>
+      <h2>2. Weekly summary</h2>
+      <div class="kpis">
+        <div class="kpi"><div class="l">Total planned (P)</div><div class="v" id="kP">0</div></div>
+        <div class="kpi"><div class="l">Total actual (A)</div><div class="v" id="kA">0</div></div>
+        <div class="kpi"><div class="l">Shifts absent (X = P − A)</div><div class="v" id="kX">0</div></div>
+        <div class="kpi" id="kRbox"><div class="l">% absent (X ÷ P × 100)</div><div class="v" id="kR">0.0%</div></div>
+      </div>
+    </section>
+
+    <section>
+      <h2>3. Absence details</h2>
+      <div class="scroll"><table class="abs" id="absTbl"></table></div>
+      <div class="toolbar noprint"><button class="alt sm" id="bAddAbs">+ Add absence</button><span class="rules" id="absHint"></span></div>
+    </section>
+
+    <section>
+      <h2>4. Comments</h2>
+      <textarea id="comments" placeholder="Reasons for absence, relief / agency cover, actual higher than plan, action taken where absenteeism is above 10%…"></textarea>
+    </section>
+
+    <section class="noprint">
+      <h2>SOP checks</h2>
+      <ul class="checks" id="checks"></ul>
+    </section>
+
+    <section>
+      <h2>5. Sign-off</h2>
+      <div class="sign">
+        <div><label>Completed by (Operational Manager)</label><input id="sCompName" placeholder="Name"><input id="sCompDate" type="date"></div>
+        <div><label>Checked by (Area Manager)</label><input id="sChkName" placeholder="Name"><input id="sChkDate" type="date"></div>
+        <div><label>Approved by (Nursing Manager)</label><input id="sAppName" placeholder="Name"><input id="sAppDate" type="date"></div>
+        <div><label>Date submitted</label><input id="sSub" type="date"><span class="rules">Due 12:00 Tuesday after week end</span></div>
+      </div>
+    </section>
+  </div>
+
+  <!-- ================= MONTHLY ================= -->
+  <div id="tMonth" class="hidden">
+    <section>
+      <h2>Monthly roll-up (nursing administration)</h2>
+      <p>Import the weekly register files (JSON) received from units. The table groups them by unit and calculates monthly totals.</p>
+      <div class="toolbar noprint">
+        <button id="bMImp">Import weekly files</button>
+        <button class="alt" id="bMSaved">Add all saved in this browser</button>
+        <button class="alt" id="bMCsv">Export CSV</button>
+        <button class="alt" onclick="window.print()">Print / PDF</button>
+        <button class="warn" id="bMClr">Clear</button>
+        <input type="file" id="fMImp" accept=".json" multiple hidden>
+        <span class="msg" id="mmsg"></span>
+      </div>
+      <div class="scroll"><table id="monTbl"></table></div>
+    </section>
+  </div>
+
+  <footer><span>Together, moving the health system forward</span><span>Eastern Cape Department of Health</span></footer>
+</div>
+
+<script>
+const DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+const BASE = [
+  { name:'Registered Nurses', shift:'Day', fixed:true }, { name:'Registered Nurses', shift:'Night', fixed:true },
+  { name:'Staff Nurses', shift:'Day', fixed:true }, { name:'Staff Nurses', shift:'Night', fixed:true },
+  { name:'Auxiliary Nurses', shift:'Day', fixed:true }, { name:'Auxiliary Nurses', shift:'Night', fixed:true } ];
+const REASONS = ['Sick leave','Annual leave','Family responsibility','AWOL','Study leave','Other'];
+const STORE = 'ecdoh_weekly_register_v1';
+const FIELDS = ['facility','unit','weekNo','month','from','to','comments','sCompName','sCompDate','sChkName','sChkDate','sAppName','sAppDate','sSub'];
+const $ = id => document.getElementById(id);
+const num = v => { const n = parseFloat(v); return isNaN(n) ? 0 : n; };
+const r1 = n => Math.round(n * 10) / 10;
+const pct = (p, a) => p ? (p - a) / p * 100 : 0;
+const band = r => r > 15 ? 'hi' : r > 10 ? 'mid' : '';
+const esc = s => String(s ?? '').replace(/[&<>"]/g, m => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[m]));
+
+let S = fresh();
+function fresh() {
+  return { dates: Array(7).fill(''), rows: BASE.map(b => ({ ...b, p: Array(7).fill(''), a: Array(7).fill('') })), absences: [], f: {} };
+}
+function iso(d) { return d.toISOString().slice(0, 10); }
+function addDays(s, n) { const d = new Date(s + 'T00:00:00'); d.setDate(d.getDate() + n); return iso(new Date(d.getTime() - d.getTimezoneOffset() * 60000)); }
+function fmtD(s) { if (!s) return ''; const [y, m, d] = s.split('-'); return `${d}/${m}/${y}`; }
+
+// ---------- render register
+function renderReg() {
+  let h = '<thead><tr><th rowspan="3">Category</th><th rowspan="3">Shift</th>';
+  DAYS.forEach(d => h += `<th colspan="2">${d.toUpperCase()}</th>`);
+  h += '<th colspan="2">Week total</th><th rowspan="3">Absent<br>(P − A)</th><th rowspan="3">% Absent</th></tr><tr class="sub">';
+  DAYS.forEach((d, i) => h += `<th colspan="2"><input type="date" data-date="${i}" value="${S.dates[i]}"></th>`);
+  h += '<th colspan="2"></th></tr><tr class="sub">';
+  for (let i = 0; i < 8; i++) h += '<th>Plan</th><th>Actual</th>';
+  h += '</tr></thead><tbody>';
+  S.rows.forEach((r, ri) => {
+    h += '<tr><td class="cat">' + (r.fixed ? `<b>${r.name}</b>` : `<input data-name="${ri}" placeholder="Other (specify)" value="${esc(r.name)}">`) + '</td>';
+    h += '<td>' + (r.fixed ? r.shift : `<select data-shift="${ri}">${['Day','Night'].map(s => `<option${s === r.shift ? ' selected' : ''}>${s}</option>`).join('')}</select>`) + '</td>';
+    for (let d = 0; d < 7; d++)
+      h += `<td><input class="n" inputmode="decimal" data-r="${ri}" data-t="p" data-d="${d}" value="${r.p[d]}"></td><td><input class="n a" inputmode="decimal" data-r="${ri}" data-t="a" data-d="${d}" value="${r.a[d]}"></td>`;
+    h += `<td class="tot" id="rp${ri}"></td><td class="tot" id="ra${ri}"></td><td class="tot" id="rx${ri}"></td><td class="tot" id="rr${ri}"></td></tr>`;
+  });
+  h += '<tr class="dt"><td colspan="2" style="text-align:left">DAILY TOTAL</td>';
+  for (let d = 0; d < 7; d++) h += `<td id="dp${d}"></td><td id="da${d}"></td>`;
+  h += '<td class="tot" id="tP"></td><td class="tot" id="tA"></td><td class="tot" id="tX"></td><td class="tot" id="tR"></td></tr></tbody>';
+  $('reg').innerHTML = h;
+}
+function renderAbs() {
+  const cats = [...new Set(S.rows.filter(r => r.name).map(r => r.name))];
+  let h = '<thead><tr><th>Date</th><th>Name &amp; surname</th><th>Category</th><th>Shift</th><th>Reason</th><th>Relief arranged?</th><th>Days</th><th class="noprint"></th></tr></thead><tbody>';
+  S.absences.forEach((a, i) => {
+    h += `<tr><td><select data-ab="${i}" data-k="date"><option value=""></option>${S.dates.map((d, j) => d ? `<option value="${d}"${a.date === d ? ' selected' : ''}>${DAYS[j]} ${fmtD(d)}</option>` : '').join('')}</select></td>
+      <td><input data-ab="${i}" data-k="name" value="${esc(a.name)}"></td>
+      <td><select data-ab="${i}" data-k="cat"><option></option>${cats.map(c => `<option${a.cat === c ? ' selected' : ''}>${esc(c)}</option>`).join('')}</select></td>
+      <td><select data-ab="${i}" data-k="shift">${['Day','Night'].map(s => `<option${a.shift === s ? ' selected' : ''}>${s}</option>`).join('')}</select></td>
+      <td><select data-ab="${i}" data-k="reason"><option></option>${REASONS.map(x => `<option${a.reason === x ? ' selected' : ''}>${x}</option>`).join('')}</select></td>
+      <td><select data-ab="${i}" data-k="relief"><option></option><option${a.relief === 'Yes' ? ' selected' : ''}>Yes</option><option${a.relief === 'No' ? ' selected' : ''}>No</option></select></td>
+      <td><input data-ab="${i}" data-k="days" inputmode="decimal" value="${esc(a.days)}" style="width:60px"></td>
+      <td class="noprint"><button class="warn sm" data-del="${i}">✕</button></td></tr>`;
+  });
+  if (!S.absences.length) h += '<tr><td colspan="8" style="color:#5f6b66">No absences recorded.</td></tr>';
+  $('absTbl').innerHTML = h + '</tbody>';
+}
+
+// ---------- calculations + SOP checks
+function calc() {
+  let P = 0, A = 0; const dp = Array(7).fill(0), da = Array(7).fill(0);
+  let blanks = 0, overs = [], rowMismatch = false;
+  S.rows.forEach((r, ri) => {
+    let p = 0, a = 0; const used = r.fixed || r.name || r.p.some(v => v !== '') || r.a.some(v => v !== '');
+    for (let d = 0; d < 7; d++) {
+      const pv = num(r.p[d]), av = num(r.a[d]); p += pv; a += av; dp[d] += pv; da[d] += av;
+      const pi = document.querySelector(`[data-r="${ri}"][data-t="p"][data-d="${d}"]`), ai = document.querySelector(`[data-r="${ri}"][data-t="a"][data-d="${d}"]`);
+      const pe = used && r.p[d] === '', ae = used && r.a[d] === '';
+      pi.classList.toggle('empty', pe); ai.classList.toggle('empty', ae); blanks += pe + ae;
+      const ov = av > pv; ai.classList.toggle('over', ov); if (ov) overs.push(`${r.name || 'Other'} ${r.shift}, ${DAYS[d]}`);
+    }
+    $('rp' + ri).textContent = r1(p); $('ra' + ri).textContent = r1(a); $('rx' + ri).textContent = r1(p - a);
+    const rr = pct(p, a); $('rr' + ri).textContent = p ? rr.toFixed(1) + '%' : '–'; $('rr' + ri).className = 'tot ' + band(rr);
+    if (!r.fixed && !r.name && (p || a)) rowMismatch = true;
+    P += p; A += a;
+  });
+  for (let d = 0; d < 7; d++) { $('dp' + d).textContent = r1(dp[d]); $('da' + d).textContent = r1(da[d]); }
+  const R = pct(P, A);
+  $('tP').textContent = r1(P); $('tA').textContent = r1(A); $('tX').textContent = r1(P - A);
+  $('tR').textContent = P ? R.toFixed(1) + '%' : '–'; $('tR').className = 'tot ' + band(R);
+  $('kP').textContent = r1(P); $('kA').textContent = r1(A); $('kX').textContent = r1(P - A); $('kR').textContent = R.toFixed(1) + '%';
+  $('kRbox').className = 'kpi ' + (R > 10 ? 'hi' : '');
+  const shortfall = r1(dp.reduce((s, v, i) => s + Math.max(0, v - da[i]), 0));
+  const absDays = S.absences.length;
+  $('absHint').textContent = shortfall ? `Daily shortfall this week: ${shortfall} shift(s) – each absent nurse should be listed.` : '';
+
+  // checks
+  const c = [], f = id => $(id).value.trim(), com = f('comments');
+  const miss = ['facility','unit','weekNo','month','from','to'].filter(k => !f(k));
+  c.push(miss.length ? ['err', 'Header incomplete: ' + miss.map(k => ({ facility:'Hospital', unit:'Ward/Unit', weekNo:'Week number', month:'Month', from:'Week from', to:'Week to' }[k])).join(', ')] : ['ok', 'Header complete']);
+  if (f('from')) {
+    const day = new Date(f('from') + 'T00:00:00').getDay();
+    if (day !== 1) c.push(['err', 'Week from date is not a Monday']);
+    if (f('to') && f('to') !== addDays(f('from'), 6)) c.push(['err', 'Week to date should be the Sunday 6 days after Week from']);
+    if (S.dates.some((d, i) => d && d !== addDays(f('from'), i))) c.push(['wrn', 'One or more column dates do not match the week (check year and month)']);
+  }
+  if (S.dates.some(d => !d)) c.push(['err', 'Not every day column has a date']);
+  c.push(blanks ? ['err', `${blanks} blank cell(s) – enter 0 where no nurses were planned or on duty`] : ['ok', 'No blank cells']);
+    if (overs.length) c.push([com ? 'wrn' : 'err', `Actual higher than plan (${overs.length}): ${overs.slice(0, 4).join('; ')}${overs.length > 4 ? '…' : ''} – explain in Comments`]);
+  if (shortfall && absDays === 0) c.push(['err', 'There are absences on the register but none listed in Absence details']);
+  else if (shortfall) c.push(['ok', `${absDays} absence(s) listed against a daily shortfall of ${shortfall} shift(s)`]);
+  if (S.absences.some(a => !a.date || !a.name || !a.reason)) c.push(['wrn', 'Some absence rows are missing date, name or reason']);
+  if (R > 10) c.push([com.length > 15 ? 'ok' : 'err', `Absenteeism ${R.toFixed(1)}% is above 10% – ${com.length > 15 ? 'explanation provided' : 'explain in Comments with action taken'}`]);
+  if (!f('sCompName')) c.push(['wrn', 'Not yet signed off by the Operational Manager']);
+  else if (!f('sChkName') || !f('sAppName')) c.push(['wrn', 'Awaiting Area Manager / Nursing Manager sign-off']);
+  if (f('to') && f('sSub')) { const due = addDays(f('to'), 2); if (f('sSub') > due) c.push(['wrn', `Submitted after the due date (${fmtD(due)})`]); }
+  $('checks').innerHTML = c.map(([k, t]) => `<li class="${k}">${k === 'ok' ? '✔' : k === 'err' ? '✖' : '!'} ${t}</li>`).join('');
+}
+
+// ---------- events
+document.addEventListener('input', e => {
+  const t = e.target, ds = t.dataset;
+  if (ds.r !== undefined) { S.rows[ds.r][ds.t][ds.d] = t.value; calc(); }
+  else if (ds.name !== undefined) { S.rows[ds.name].name = t.value; calc(); }
+  else if (ds.ab !== undefined) { S.absences[ds.ab][ds.k] = t.value; calc(); }
+  else if (FIELDS.includes(t.id)) calc();
+});
+document.addEventListener('change', e => {
+  const t = e.target, ds = t.dataset;
+  if (ds.date !== undefined) { S.dates[ds.date] = t.value; renderAbs(); calc(); }
+  else if (ds.shift !== undefined) { S.rows[ds.shift].shift = t.value; }
+  else if (ds.name !== undefined) renderAbs();
+  else if (ds.ab !== undefined) { S.absences[ds.ab][ds.k] = t.value; calc(); }
+  else if (t.id === 'from' && t.value) {
+    S.dates = DAYS.map((_, i) => addDays(t.value, i)); $('to').value = addDays(t.value, 6);
+    if (!$('month').value) $('month').value = new Date(t.value + 'T00:00:00').toLocaleDateString('en-GB', { month:'long', year:'numeric' });
+    renderReg(); renderAbs(); calc();
+  } else if (FIELDS.includes(t.id)) calc();
+});
+document.addEventListener('click', e => { const d = e.target.dataset?.del; if (d !== undefined) { S.absences.splice(d, 1); renderAbs(); calc(); } });
+$('bAddAbs').onclick = () => { S.absences.push({ date:'', name:'', cat:'', shift:'Day', reason:'', relief:'', days:'1' }); renderAbs(); calc(); };
+$('bCopy').onclick = () => { S.rows.forEach(r => r.a = r.p.slice()); renderReg(); calc(); flash('Plan copied to Actual – now change the days with absences'); };
+$('bNew').onclick = () => {
+  if (!confirm('Start a new week? Unsaved entries will be cleared (facility and unit are kept).')) return;
+  const keep = { facility: $('facility').value, unit: $('unit').value };
+  const nextFrom = $('from').value ? addDays($('from').value, 7) : '';
+  const wk = $('weekNo').value; S = fresh(); FIELDS.forEach(k => $(k).value = '');
+  Object.assign(keep, {}); $('facility').value = keep.facility; $('unit').value = keep.unit;
+  if (wk) $('weekNo').value = +wk + 1;
+  if (nextFrom) { $('from').value = nextFrom; $('from').dispatchEvent(new Event('change', { bubbles:true })); } else draw();
+};
+
+// ---------- save / load / import / export
+function snap() { const f = {}; FIELDS.forEach(k => f[k] = $(k).value); return { type:'ecdoh-weekly-register', version:1, ...f, dates:S.dates, rows:S.rows, absences:S.absences }; }
+function load(o) {
+  S = fresh(); FIELDS.forEach(k => $(k).value = o[k] || '');
+  if (o.dates) S.dates = o.dates.slice(0, 7);
+  if (o.rows) o.rows.forEach((r, i) => { if (S.rows[i]) { S.rows[i] = { ...S.rows[i], ...r, fixed: S.rows[i].fixed }; } });
+  S.absences = o.absences || []; draw();
+}
+function key() { return `${$('unit').value || 'Unit'} | Week ${$('weekNo').value || '?'} | ${fmtD($('from').value) || 'undated'}`; }
+function store(all) { try { if (all === undefined) return JSON.parse(localStorage.getItem(STORE) || '{}'); localStorage.setItem(STORE, JSON.stringify(all)); return true; } catch (e) { return all === undefined ? {} : false; } }
+function flash(t, id = 'msg') { $(id).textContent = t; setTimeout(() => $(id).textContent = '', 3500); }
+function download(name, text, type) { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type })); a.download = name; a.click(); }
+const fname = ext => `Absenteeism_${($('unit').value || 'Unit').replace(/\W+/g, '')}_Wk${$('weekNo').value || ''}_${$('from').value || ''}.${ext}`;
+
+$('bSave').onclick = () => { const all = store(); all[key()] = snap(); flash(store(all) ? 'Saved: ' + key() : 'This browser cannot save – use Export file'); };
+$('bOpen').onclick = () => {
+  const all = store(), ks = Object.keys(all).sort(); if (!ks.length) return flash('Nothing saved yet');
+  const n = prompt('Type the number of the register to open:\n' + ks.map((k, i) => `${i + 1}. ${k}`).join('\n'));
+  if (ks[+n - 1]) { load(all[ks[+n - 1]]); flash('Opened ' + ks[+n - 1]); }
+};
+$('bJson').onclick = () => download(fname('json'), JSON.stringify(snap(), null, 1), 'application/json');
+$('bCsv').onclick = () => {
+  const f = snap(), out = [['Facility','Unit','Week','Month','Date','Day','Category','Shift','Plan','Actual']];
+  S.rows.forEach(r => { if (!r.name) return; DAYS.forEach((d, i) => out.push([f.facility, f.unit, f.weekNo, f.month, S.dates[i], d, r.name, r.shift, num(r.p[i]), num(r.a[i])])); });
+  download(fname('csv'), out.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n'), 'text/csv');
+};
+$('bImp').onclick = () => $('fImp').click();
+$('fImp').onchange = e => {
+  const file = e.target.files[0]; if (!file) return; const rd = new FileReader();
+  rd.onload = () => {
+    try {
+      if (/\.json$/i.test(file.name)) { const o = JSON.parse(rd.result); if (o.type !== 'ecdoh-weekly-register') throw 0; load(o); }
+      else importCsv(rd.result);
+      flash('Imported ' + file.name);
+    } catch (x) { flash('Could not import – use a file exported from this register'); }
+  };
+  rd.readAsText(file); e.target.value = '';
+};
+function parseCsv(t) {
+  return t.trim().split(/\r?\n/).map(l => { const o = []; let cur = '', q = false;
+    for (let i = 0; i < l.length; i++) { const ch = l[i];
+      if (q) { if (ch === '"' && l[i + 1] === '"') { cur += '"'; i++; } else if (ch === '"') q = false; else cur += ch; }
+      else if (ch === '"') q = true; else if (ch === ',' || ch === ';') { o.push(cur); cur = ''; } else cur += ch; }
+    o.push(cur); return o.map(s => s.trim()); });
+}
+function importCsv(text) {
+  const rows = parseCsv(text), h = rows.shift().map(x => x.toLowerCase());
+  const col = n => h.indexOf(n); const need = ['date','category','shift','plan','actual'];
+  if (need.some(n => col(n) < 0)) throw 0;
+  const first = rows[0] || []; const o = { type:'ecdoh-weekly-register', facility: first[col('facility')] || '', unit: first[col('unit')] || '',
+    weekNo: first[col('week')] || '', month: first[col('month')] || '', rows: [], dates: [] };
+  const toIso = s => { const m = s.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})$/); if (m) return `${m[3].length === 2 ? '20' + m[3] : m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`; return s; };
+  const dates = [...new Set(rows.map(r => toIso(r[col('date')])).filter(Boolean))].sort().slice(0, 7);
+  o.dates = dates; o.from = dates[0] || ''; o.to = dates[0] ? addDays(dates[0], 6) : '';
+  const keyed = {}; rows.forEach(r => { const k = r[col('category')] + '|' + r[col('shift')]; (keyed[k] = keyed[k] || []).push(r); });
+  const list = BASE.map(b => ({ name:b.name, shift:b.shift, p:Array(7).fill(''), a:Array(7).fill('') }));
+  let other = 4;
+  Object.entries(keyed).forEach(([k, rs]) => {
+    const [cat, sh] = k.split('|'); let idx = list.findIndex((b, i) => b.name.toLowerCase() === cat.toLowerCase() && b.shift.toLowerCase() === sh.toLowerCase());
+    if (idx < 0) return;
+    rs.forEach(r => { const d = dates.indexOf(toIso(r[col('date')])); if (d >= 0) { list[idx].p[d] = r[col('plan')]; list[idx].a[d] = r[col('actual')]; } });
+  });
+  o.rows = list; load(o);
+}
+function draw() { renderReg(); renderAbs(); calc(); }
+
+// ---------- monthly roll-up
+let M = [];
+function addWeek(o) { const k = `${o.unit}|${o.from}`; M = M.filter(x => `${x.unit}|${x.from}` !== k); M.push(o); }
+function wkTot(o) { let p = 0, a = 0; (o.rows || []).forEach(r => { if (!r.name) return; for (let d = 0; d < 7; d++) { p += num(r.p[d]); a += num(r.a[d]); } }); return { p, a }; }
+function renderMonth() {
+  if (!M.length) { $('monTbl').innerHTML = '<tr><td style="color:#5f6b66">No weekly registers imported yet.</td></tr>'; return; }
+  const units = [...new Set(M.map(o => o.unit || 'Unit'))].sort();
+  let h = '<thead><tr><th>Unit</th><th>Week</th><th>Dates</th><th>Planned</th><th>Actual</th><th>Absent</th><th>% Absent</th><th>Absences listed</th><th>Signed off</th></tr></thead><tbody>';
+  let GP = 0, GA = 0;
+  units.forEach(u => {
+    const ws = M.filter(o => (o.unit || 'Unit') === u).sort((x, y) => (x.from || '').localeCompare(y.from || '')); let UP = 0, UA = 0;
+    ws.forEach(o => { const t = wkTot(o), r = pct(t.p, t.a); UP += t.p; UA += t.a;
+      h += `<tr><td style="text-align:left">${esc(u)}</td><td>${esc(o.weekNo)}</td><td>${fmtD(o.from)} – ${fmtD(o.to)}</td><td>${r1(t.p)}</td><td>${r1(t.a)}</td><td>${r1(t.p - t.a)}</td><td class="${band(r)}">${r.toFixed(1)}%</td><td>${(o.absences || []).length}</td><td>${o.sAppName ? '✔ Approved' : o.sCompName ? 'Partly' : '✖'}</td></tr>`; });
+    const ur = pct(UP, UA);
+    h += `<tr class="dt"><td colspan="3" style="text-align:right">${esc(u)} – month total</td><td>${r1(UP)}</td><td>${r1(UA)}</td><td>${r1(UP - UA)}</td><td class="${band(ur)}">${ur.toFixed(1)}%</td><td colspan="2"></td></tr>`;
+    GP += UP; GA += UA;
+  });
+  if (units.length > 1) { const g = pct(GP, GA); h += `<tr class="dt"><td colspan="3" style="text-align:right">ALL UNITS</td><td>${r1(GP)}</td><td>${r1(GA)}</td><td>${r1(GP - GA)}</td><td class="${band(g)}">${g.toFixed(1)}%</td><td colspan="2"></td></tr>`; }
+  $('monTbl').innerHTML = h + '</tbody>';
+}
+$('bMImp').onclick = () => $('fMImp').click();
+$('fMImp').onchange = async e => {
+  let ok = 0, bad = 0;
+  for (const f of e.target.files) { try { const o = JSON.parse(await f.text()); if (o.type !== 'ecdoh-weekly-register') throw 0; addWeek(o); ok++; } catch (x) { bad++; } }
+  e.target.value = ''; renderMonth(); flash(`${ok} imported${bad ? `, ${bad} skipped (not a register file)` : ''}`, 'mmsg');
+};
+$('bMSaved').onclick = () => { const all = Object.values(store()); all.forEach(addWeek); renderMonth(); flash(`${all.length} saved register(s) added`, 'mmsg'); };
+$('bMClr').onclick = () => { M = []; renderMonth(); };
+$('bMCsv').onclick = () => {
+  const out = [['Unit','Week','From','To','Planned','Actual','Absent','% Absent']];
+  M.forEach(o => { const t = wkTot(o); out.push([o.unit, o.weekNo, o.from, o.to, r1(t.p), r1(t.a), r1(t.p - t.a), pct(t.p, t.a).toFixed(1)]); });
+  download('Absenteeism_Monthly_Rollup.csv', out.map(r => r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\n'), 'text/csv');
+};
+
+// ---------- tabs
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x === b));
+  ['tWeek','tMonth'].forEach(id => $(id).classList.toggle('hidden', id !== b.dataset.tab));
+  if (b.dataset.tab === 'tMonth') renderMonth();
+});
+
+draw();
+</script>
+</body>
+</html>

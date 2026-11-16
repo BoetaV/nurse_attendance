@@ -1,0 +1,77 @@
+# Deploys on every push to main:
+#   1. apps-script – pushes apps_script/ to Google Apps Script with clasp and updates
+#                    the existing web-app deployment (same URL). Skipped until the
+#                    secrets CLASPRC_JSON and SCRIPT_ID are set.
+#   2. pages       – builds the front end and publishes it to GitHub Pages
+#                    (https://<user>.github.io/nurse_attendance/). Needs the repository
+#                    variable API_URL = the Apps Script web app URL ending in /exec.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  apps-script:
+    runs-on: ubuntu-latest
+    env:
+      CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+      SCRIPT_ID: ${{ secrets.SCRIPT_ID }}
+      DEPLOYMENT_ID: ${{ secrets.DEPLOYMENT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Check syntax
+        run: |
+          cat apps_script/*.gs > /tmp/all.js && node --check /tmp/all.js
+          sed -n '/<script>/,/<\/script>/p' apps_script/App.html | sed '1d;$d' > /tmp/app.js && node --check /tmp/app.js
+      - name: Not configured
+        if: env.CLASPRC_JSON == '' || env.SCRIPT_ID == ''
+        run: echo "::notice::CLASPRC_JSON / SCRIPT_ID secrets not set – skipping push to Apps Script."
+      - name: Push to Apps Script
+        if: env.CLASPRC_JSON != '' && env.SCRIPT_ID != ''
+        run: |
+          npm install -g @google/clasp@2.4.2
+          printf '%s' "$CLASPRC_JSON" > ~/.clasprc.json
+          printf '{"scriptId":"%s","rootDir":"apps_script"}' "$SCRIPT_ID" > .clasp.json
+          clasp push --force
+          if [ -n "$DEPLOYMENT_ID" ]; then
+            clasp deploy --deploymentId "$DEPLOYMENT_ID" --description "GitHub ${GITHUB_SHA::7}"
+          else
+            echo "::notice::DEPLOYMENT_ID not set – code pushed, but the web app still runs its previous version."
+          fi
+          rm -f ~/.clasprc.json
+
+  pages:
+    needs: apps-script
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Build
+        env:
+          API_URL: ${{ vars.API_URL }}
+        run: node tools/build-pages.js
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+      - id: deploy
+        uses: actions/deploy-pages@v4
