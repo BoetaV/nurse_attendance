@@ -1,10 +1,10 @@
-# Deploys on every push to main:
+# Deploys on every push to main (or "Run workflow"):
 #   1. apps-script – pushes apps_script/ to Google Apps Script with clasp and updates
 #                    the existing web-app deployment (same URL). Skipped until the
-#                    secrets CLASPRC_JSON and SCRIPT_ID are set.
+#                    repository secrets CLASPRC_JSON and SCRIPT_ID are set.
 #   2. pages       – builds the front end and publishes it to GitHub Pages
-#                    (https://<user>.github.io/nurse_attendance/). Needs the repository
-#                    variable API_URL = the Apps Script web app URL ending in /exec.
+#                    (https://<user>.github.io/nurse_attendance/). Needs Settings > Pages >
+#                    Source = "GitHub Actions" and the repository variable API_URL.
 name: Deploy
 
 on:
@@ -33,29 +33,58 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+
       - name: Check syntax
         run: |
           cat apps_script/*.gs > /tmp/all.js && node --check /tmp/all.js
           sed -n '/<script>/,/<\/script>/p' apps_script/App.html | sed '1d;$d' > /tmp/app.js && node --check /tmp/app.js
+
       - name: Not configured
         if: env.CLASPRC_JSON == '' || env.SCRIPT_ID == ''
-        run: echo "::notice::CLASPRC_JSON / SCRIPT_ID secrets not set – skipping push to Apps Script."
+        run: |
+          [ -z "$CLASPRC_JSON" ] && echo "::warning::Repository secret CLASPRC_JSON is not set (Settings > Secrets and variables > Actions > Secrets tab – not Variables, not an environment)."
+          [ -z "$SCRIPT_ID" ] && echo "::warning::Repository secret SCRIPT_ID is not set."
+          echo "Skipping push to Apps Script."
+
       - name: Push to Apps Script
         if: env.CLASPRC_JSON != '' && env.SCRIPT_ID != ''
         run: |
-          npm install -g @google/clasp@2.4.2
-          printf '%s' "$CLASPRC_JSON" > ~/.clasprc.json
-          printf '{"scriptId":"%s","rootDir":"apps_script"}' "$SCRIPT_ID" > .clasp.json
-          clasp push --force
+          npm install -g @google/clasp@2.4.2 > /dev/null 2>&1
+          node tools/clasp-auth.js
+          set +e
+          clasp push --force > push.log 2>&1
+          rc=$?
+          cat push.log
+          if [ $rc -ne 0 ] || grep -qiE "error|not enabled|not found|permission|invalid_grant|could not read" push.log; then
+            if grep -qi "not enabled" push.log; then
+              echo "::error::The Apps Script API is OFF for this Google account. Turn it on at https://script.google.com/home/usersettings, wait a few minutes, then re-run."
+            elif grep -qiE "invalid_grant|invalid_client|could not read|unauthorized" push.log; then
+              echo "::error::The Google login in CLASPRC_JSON was rejected. Run 'clasp login' again on your PC and replace the CLASPRC_JSON secret."
+            elif grep -qiE "not found|permission|forbidden|404|403" push.log; then
+              echo "::error::Google refused access to the script. Check SCRIPT_ID (Apps Script > Project Settings > Script ID) and that 'clasp login' used the SAME Google account that owns the script."
+            else
+              echo "::error::clasp push failed – see the log lines above."
+            fi
+            rm -f ~/.clasprc.json
+            exit 1
+          fi
           if [ -n "$DEPLOYMENT_ID" ]; then
-            clasp deploy --deploymentId "$DEPLOYMENT_ID" --description "GitHub ${GITHUB_SHA::7}"
+            clasp deploy --deploymentId "$DEPLOYMENT_ID" --description "GitHub ${GITHUB_SHA::7}" > deploy.log 2>&1
+            cat deploy.log
+            if grep -qiE "error|not found" deploy.log; then
+              echo "::error::Code was pushed, but updating the web app failed. Check DEPLOYMENT_ID (Apps Script > Deploy > Manage deployments)."
+              rm -f ~/.clasprc.json
+              exit 1
+            fi
           else
-            echo "::notice::DEPLOYMENT_ID not set – code pushed, but the web app still runs its previous version."
+            echo "::notice::Code pushed. DEPLOYMENT_ID not set yet – create the web app once (Deploy > New deployment), then add DEPLOYMENT_ID."
           fi
           rm -f ~/.clasprc.json
 
   pages:
     needs: apps-script
+    # Publish the site even if the Apps Script push failed.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     environment:
       name: github-pages
